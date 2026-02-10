@@ -6,7 +6,7 @@ import { createServer } from './lexicon'
 import feedGeneration from './methods/feed-generation'
 import describeGenerator from './methods/describe-generator'
 import { createDb, Database, migrateToLatest } from './db'
-import { FirehoseSubscription } from './subscription'
+import { JetstreamSubscription } from './subscription'
 import { AppContext, Config } from './config'
 import wellKnown from './well-known'
 
@@ -14,13 +14,13 @@ export class FeedGenerator {
   public app: express.Application
   public server?: http.Server
   public db: Database
-  public firehose: FirehoseSubscription
+  public firehose: JetstreamSubscription
   public cfg: Config
 
   constructor(
     app: express.Application,
     db: Database,
-    firehose: FirehoseSubscription,
+    firehose: JetstreamSubscription,
     cfg: Config,
   ) {
     this.app = app
@@ -32,7 +32,7 @@ export class FeedGenerator {
   static create(cfg: Config) {
     const app = express()
     const db = createDb(cfg.sqliteLocation)
-    const firehose = new FirehoseSubscription(db, cfg.subscriptionEndpoint)
+    const firehose = new JetstreamSubscription(db, cfg.subscriptionEndpoint)
 
     const didCache = new MemoryCache()
     const didResolver = new DidResolver({
