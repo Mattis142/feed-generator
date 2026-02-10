@@ -132,3 +132,7 @@ dist
 # intellij
 .idea/
 *.iml
+package-lock.json
+yarn.lock
+db.sqlite
+yarn.lock
