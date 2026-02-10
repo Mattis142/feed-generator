@@ -1,21 +1,26 @@
 import { Database } from './db'
 import WebSocket from 'ws'
 
+export type JetstreamConfig = {
+  wantedCollections: string[]
+  wantedDids?: string[]
+}
+
 export class JetstreamSubscription {
   public db: Database
   public service: string
   public sub: WebSocket | undefined
   public cursor: number | undefined
-  public intervalId: NodeJS.Timeout | undefined
+  public config: JetstreamConfig
 
-  constructor(db: Database, service: string) {
+  constructor(db: Database, service: string, config: JetstreamConfig) {
     this.db = db
     this.service = service
+    this.config = config
   }
 
   async run(subscriptionReconnectDelay: number) {
     try {
-      // Get the last cursor from the database
       const res = await this.db
         .selectFrom('sub_state')
         .selectAll()
@@ -26,43 +31,26 @@ export class JetstreamSubscription {
         this.cursor = res.cursor
       }
 
-      // Construct the Jetstream URL
-      // The service URL in .env is likely "wss://jetstream2.us-east.bsky.network/subscribe"
-      // We need to append query parameters.
-      let urlStr = this.service
-      if (!urlStr.includes('?')) {
-        urlStr += '?'
-      } else {
-        urlStr += '&'
+      const urlObj = new URL(this.service)
+      this.config.wantedCollections.forEach((c) =>
+        urlObj.searchParams.append('wantedCollections', c),
+      )
+      if (this.config.wantedDids && this.config.wantedDids.length > 0) {
+        this.config.wantedDids.forEach((d) =>
+          urlObj.searchParams.append('wantedDids', d),
+        )
       }
-
-      const params = new URLSearchParams()
-      params.append('wantedCollections', 'app.bsky.feed.post')
       if (this.cursor) {
-        params.append('cursor', this.cursor.toString())
+        urlObj.searchParams.append('cursor', this.cursor.toString())
       }
 
-      // If service url ended with ?, append params without leading ? or &.
-      // Simplest is to use URL object if service is a valid URL base.
-      try {
-        const urlObj = new URL(this.service)
-        urlObj.searchParams.append('wantedCollections', 'app.bsky.feed.post')
-        if (this.cursor) {
-          urlObj.searchParams.append('cursor', this.cursor.toString())
-        }
-        urlStr = urlObj.toString()
-      } catch (e) {
-        // Fallback if strictly not a URL (though it should be)
-        urlStr = `${this.service}?wantedCollections=app.bsky.feed.post`
-        if (this.cursor) urlStr += `&cursor=${this.cursor}`
-      }
-
+      const urlStr = urlObj.toString()
       console.log(`Connecting to Jetstream at: ${urlStr}`)
 
       this.sub = new WebSocket(urlStr)
 
       this.sub.on('open', () => {
-        console.log('Jetstream connected!')
+        console.log(`Jetstream connected (${this.config.wantedCollections.join(', ')})`)
       })
 
       this.sub.on('message', async (data: WebSocket.Data) => {
@@ -82,7 +70,6 @@ export class JetstreamSubscription {
         console.log('Jetstream connection closed. Reconnecting...')
         setTimeout(() => this.run(subscriptionReconnectDelay), subscriptionReconnectDelay)
       })
-
     } catch (err) {
       console.error('Error starting Jetstream subscription', err)
       setTimeout(() => this.run(subscriptionReconnectDelay), subscriptionReconnectDelay)
@@ -90,75 +77,108 @@ export class JetstreamSubscription {
   }
 
   async handleEvent(evt: any) {
-    // We only care about commits
     if (evt.kind !== 'commit') return
-
     const { operation, collection, rkey, record, cid } = evt.commit
-
-    // Check collection (redundant if filtered by server, but good practice)
-    if (collection !== 'app.bsky.feed.post') return
-
     const did = evt.did
     const uri = `at://${did}/${collection}/${rkey}`
 
-    if (operation === 'create') {
-      // Log the text as requested (optional fun)
-      if (record?.text) {
-        console.log(`${did}: ${record.text}`)
-      }
+    if (collection === 'app.bsky.feed.post') {
+      if (operation === 'create') {
+        const replyRoot = record.reply?.root?.uri || null
+        const replyParent = record.reply?.parent?.uri || null
 
-      // Filter logic: "alf" (case-insensitive)
-      if (record?.text && record.text.toLowerCase().includes('alf')) {
-        console.log(`Found ALF post! ${uri}`)
-        const post = {
-          uri: uri,
-          cid: cid,
-          indexedAt: new Date().toISOString(),
-        }
         await this.db
           .insertInto('post')
-          .values(post)
+          .values({
+            uri,
+            cid,
+            author: did,
+            indexedAt: new Date().toISOString(),
+            likeCount: 0,
+            replyCount: 0,
+            repostCount: 0,
+            replyRoot,
+            replyParent,
+          })
           .onConflict((oc) => oc.doNothing())
           .execute()
+
+        if (replyParent) {
+          await this.db
+            .updateTable('post')
+            .set((eb) => ({
+              replyCount: eb('replyCount', '+', 1),
+            }))
+            .where('uri', '=', replyParent)
+            .execute()
+        }
+      } else if (operation === 'delete') {
+        await this.db.deleteFrom('post').where('uri', '=', uri).execute()
       }
-    } else if (operation === 'delete') {
-      await this.db
-        .deleteFrom('post')
-        .where('uri', '=', uri)
-        .execute()
+    } else if (collection === 'app.bsky.feed.like') {
+      if (operation === 'create') {
+        const subjectUri = record.subject?.uri
+        if (subjectUri) {
+          await this.db
+            .updateTable('post')
+            .set((eb) => ({
+              likeCount: eb('likeCount', '+', 1),
+            }))
+            .where('uri', '=', subjectUri)
+            .execute()
+
+          await this.db.insertInto('graph_interaction').values({
+            actor: did,
+            target: subjectUri,
+            type: 'like',
+            weight: 1,
+            indexedAt: new Date().toISOString(),
+          })
+            .onConflict((oc) => oc.doNothing())
+            .execute()
+        }
+      }
+    } else if (collection === 'app.bsky.feed.repost') {
+      if (operation === 'create') {
+        const subjectUri = record.subject?.uri
+        if (subjectUri) {
+          await this.db
+            .updateTable('post')
+            .set((eb) => ({
+              repostCount: eb('repostCount', '+', 1),
+            }))
+            .where('uri', '=', subjectUri)
+            .execute()
+
+          await this.db.insertInto('graph_interaction').values({
+            actor: did,
+            target: subjectUri,
+            type: 'repost',
+            weight: 2,
+            indexedAt: new Date().toISOString(),
+          })
+            .onConflict((oc) => oc.doNothing())
+            .execute()
+        }
+      }
     }
 
-    // Update cursor logic
     if (evt.time_us) {
-      // Update cursor in DB occasionally (e.g. every 100th event or similar)
-      // For now, simpler: update in memory, and maybe flush to DB?
-      // Or just write to DB. Jetstream is fast, writing every event might be slow.
-      // But let's assume SQLite is fast enough for now or rely on the previous logic's pattern.
-      // Previous logic updated every 20 sequences.
-      // We can use a modulo check if time_us was sequential, but it's not.
-      // Let's just update for now. If perf is bad, we optimize.
-
       await this.updateCursor(evt.time_us)
     }
   }
 
   async updateCursor(cursor: number) {
-    // Upsert the cursor
-    const result = await this.db
-      .updateTable('sub_state')
-      .set({ cursor })
-      .where('service', '=', this.service)
+    await this.db
+      .insertInto('sub_state')
+      .values({ service: this.service, cursor })
+      .onConflict((oc) => oc.column('service').doUpdateSet({ cursor }))
       .execute()
+  }
 
-    // If no row was updated, insert it
-    if (result.length === 0 || result[0].numUpdatedRows === BigInt(0)) {
-      // Double check existence to be safe or just use insert on conflict
-      // However, we can use insert ... on conflict update
-      await this.db
-        .insertInto('sub_state')
-        .values({ service: this.service, cursor })
-        .onConflict((oc) => oc.column('service').doUpdateSet({ cursor }))
-        .execute()
+  async stop() {
+    if (this.sub) {
+      this.sub.terminate()
     }
   }
 }

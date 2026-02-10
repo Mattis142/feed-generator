@@ -19,6 +19,7 @@ const run = async () => {
       maybeInt(process.env.FEEDGEN_SUBSCRIPTION_RECONNECT_DELAY) ?? 3000,
     hostname,
     serviceDid,
+    whitelist: (process.env.FEEDGEN_WHITELIST ?? '').split(',').filter(Boolean),
   })
   await server.start()
   console.log(
