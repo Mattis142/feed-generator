@@ -137,3 +137,5 @@ yarn.lock
 db.sqlite
 yarn.lock
 yarn.lock
+db.sqlite-journal
+data.db

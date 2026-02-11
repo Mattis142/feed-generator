@@ -14,6 +14,7 @@ export interface Record {
   description?: string
   descriptionFacets?: AppBskyRichtextFacet.Main[]
   avatar?: BlobRef
+  acceptsInteractions?: boolean
   labels?:
     | ComAtprotoLabelDefs.SelfLabels
     | { $type: string; [k: string]: unknown }

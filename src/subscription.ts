@@ -178,7 +178,12 @@ export class JetstreamSubscription {
 
   async stop() {
     if (this.sub) {
-      this.sub.terminate()
+      // Only terminate if the WebSocket is actually connected or connecting
+      // WebSocket ready states: CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3
+      if (this.sub.readyState === WebSocket.CONNECTING || this.sub.readyState === WebSocket.OPEN) {
+        this.sub.terminate()
+      }
+      this.sub = undefined
     }
   }
 }

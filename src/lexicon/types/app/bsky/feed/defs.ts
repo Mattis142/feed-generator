@@ -323,3 +323,22 @@ export function isThreadgateView(v: unknown): v is ThreadgateView {
 export function validateThreadgateView(v: unknown): ValidationResult {
   return lexicons.validate('app.bsky.feed.defs#threadgateView', v)
 }
+
+export interface Interaction {
+  item: string
+  event?: string
+  feedContext?: string
+  [k: string]: unknown
+}
+
+export function isInteraction(v: unknown): v is Interaction {
+  return (
+    isObj(v) &&
+    hasProp(v, '$type') &&
+    v.$type === 'app.bsky.feed.defs#interaction'
+  )
+}
+
+export function validateInteraction(v: unknown): ValidationResult {
+  return lexicons.validate('app.bsky.feed.defs#interaction', v)
+}

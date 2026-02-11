@@ -33,6 +33,7 @@ const run = async () => {
             did: feedGenDid,
             displayName: displayName,
             description: description,
+            acceptsInteractions: true,
             createdAt: new Date().toISOString(),
             contentMode: AppBskyFeedDefs.CONTENTMODEUNSPECIFIED,
         },

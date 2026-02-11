@@ -98,6 +98,7 @@ const run = async () => {
       displayName: displayName,
       description: description,
       avatar: avatarRef,
+      acceptsInteractions: true,
       createdAt: new Date().toISOString(),
       contentMode: videoOnly ? AppBskyFeedDefs.CONTENTMODEVIDEO : AppBskyFeedDefs.CONTENTMODEUNSPECIFIED,
     },

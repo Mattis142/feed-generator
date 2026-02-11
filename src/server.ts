@@ -5,6 +5,7 @@ import { DidResolver, MemoryCache } from '@atproto/identity'
 import { createServer } from './lexicon'
 import feedGeneration from './methods/feed-generation'
 import describeGenerator from './methods/describe-generator'
+import sendInteractions from './methods/send-interactions'
 import { createDb, Database, migrateToLatest } from './db'
 import { JetstreamSubscription } from './subscription'
 import { AppContext, Config } from './config'
@@ -49,6 +50,7 @@ export class FeedGenerator {
     const didResolver = new DidResolver({
       plcUrl: 'https://plc.directory',
       didCache,
+      timeout: 10000, // 10 second timeout for PLC directory
     })
 
     const server = createServer({
@@ -66,6 +68,7 @@ export class FeedGenerator {
     }
     feedGeneration(server, ctx)
     describeGenerator(server, ctx)
+    sendInteractions(server, ctx)
     app.use(server.xrpc.router)
     app.use(wellKnown(ctx))
 
@@ -109,22 +112,23 @@ export class FeedGenerator {
   private async cleanupPosts() {
     try {
       console.log('Running background cleanup for low-relevance posts...')
-      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+      // Keep at least 7 days of data for better temporal diversity
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
-      // Delete posts older than 1h that aren't from anyone's followed graph and have low engagement
+      // Delete posts older than 7 days that have zero engagement and aren't followed
       const deleted = await this.db.deleteFrom('post')
-        .where('indexedAt', '<', oneHourAgo)
-        .where('likeCount', '<', 2)
+        .where('indexedAt', '<', sevenDaysAgo)
+        .where('likeCount', '=', 0)
         .where('repostCount', '=', 0)
         .where('author', 'not in', (eb) => eb.selectFrom('graph_follow').select('followee'))
         .executeTakeFirst()
 
       console.log(`Pruned ${deleted.numDeletedRows} low-relevance posts.`)
 
-      // Cleanup served posts older than 24h
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      // Cleanup served posts older than 6 hours (extended from 24h for better fatigue tracking)
+      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
       const cleanedServed = await this.db.deleteFrom('user_served_post')
-        .where('servedAt', '<', oneDayAgo)
+        .where('servedAt', '<', sixHoursAgo)
         .executeTakeFirst()
 
       if (cleanedServed.numDeletedRows > 0) {

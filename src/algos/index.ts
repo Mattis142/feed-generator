@@ -13,7 +13,6 @@ type AlgoHandler = (
 ) => Promise<AlgoOutput>
 
 const algos: Record<string, AlgoHandler> = {
-  [whatsAlf.shortname]: socialGraph.handler,
   [socialGraph.shortname]: socialGraph.handler,
 }
 
