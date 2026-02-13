@@ -220,3 +220,247 @@ migrations['007'] = {
     await db.schema.dropTable('user_served_post').execute()
   },
 }
+
+migrations['008'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .alterTable('post')
+      .addColumn('text', 'text')
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema
+      .alterTable('post')
+      .dropColumn('text')
+      .execute()
+  },
+}
+
+migrations['009'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createTable('user_keyword')
+      .addColumn('userDid', 'varchar', (col) => col.notNull())
+      .addColumn('keyword', 'varchar', (col) => col.notNull())
+      .addColumn('score', 'real', (col) => col.notNull())
+      .addColumn('updatedAt', 'varchar', (col) => col.notNull())
+      .addPrimaryKeyConstraint('user_keyword_pk', ['userDid', 'keyword'])
+      .execute()
+
+    await db.schema
+      .createIndex('user_keyword_userDid_idx')
+      .on('user_keyword')
+      .column('userDid')
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropIndex('user_keyword_userDid_idx').execute()
+    await db.schema.dropTable('user_keyword').execute()
+  },
+}
+
+migrations['010'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createTable('user_seen_post')
+      .addColumn('userDid', 'varchar', (col) => col.notNull())
+      .addColumn('uri', 'varchar', (col) => col.notNull())
+      .addColumn('seenAt', 'varchar', (col) => col.notNull())
+      .execute()
+
+    await db.schema
+      .createIndex('user_seen_post_user_uri_idx')
+      .on('user_seen_post')
+      .columns(['userDid', 'uri'])
+      .execute()
+
+    await db.schema
+      .createIndex('user_seen_post_seenAt_idx')
+      .on('user_seen_post')
+      .column('seenAt')
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropTable('user_seen_post').execute()
+  },
+}
+
+migrations['011'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createTable('taste_similarity')
+      .addColumn('userDid', 'varchar', (col) => col.notNull())
+      .addColumn('similarUserDid', 'varchar', (col) => col.notNull())
+      .addColumn('agreementCount', 'integer', (col) => col.notNull().defaultTo(0))
+      .addColumn('totalCoLikedPosts', 'integer', (col) => col.notNull().defaultTo(0))
+      .addColumn('lastAgreementAt', 'varchar', (col) => col.notNull())
+      .addColumn('updatedAt', 'varchar', (col) => col.notNull())
+      .addPrimaryKeyConstraint('taste_similarity_pk', ['userDid', 'similarUserDid'])
+      .execute()
+
+    await db.schema
+      .createIndex('taste_similarity_userDid_idx')
+      .on('taste_similarity')
+      .column('userDid')
+      .execute()
+
+    await db.schema
+      .createIndex('taste_similarity_agreement_idx')
+      .on('taste_similarity')
+      .columns(['userDid', 'agreementCount'])
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropIndex('taste_similarity_userDid_idx').execute()
+    await db.schema.dropIndex('taste_similarity_agreement_idx').execute()
+    await db.schema.dropTable('taste_similarity').execute()
+  },
+}
+
+migrations['012'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createTable('taste_reputation')
+      .addColumn('userDid', 'varchar', (col) => col.notNull())
+      .addColumn('similarUserDid', 'varchar', (col) => col.notNull())
+      .addColumn('reputationScore', 'real', (col) => col.notNull().defaultTo(1.0))
+      .addColumn('agreementHistory', 'integer', (col) => col.notNull().defaultTo(0))
+      .addColumn('lastSeenAt', 'varchar', (col) => col.notNull())
+      .addColumn('decayRate', 'real', (col) => col.notNull().defaultTo(0.95))
+      .addColumn('updatedAt', 'varchar', (col) => col.notNull())
+      .addPrimaryKeyConstraint('taste_reputation_pk', ['userDid', 'similarUserDid'])
+      .execute()
+
+    await db.schema
+      .createIndex('taste_reputation_userDid_idx')
+      .on('taste_reputation')
+      .column('userDid')
+      .execute()
+
+    await db.schema
+      .createIndex('taste_reputation_score_idx')
+      .on('taste_reputation')
+      .columns(['userDid', 'reputationScore'])
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropIndex('taste_reputation_userDid_idx').execute()
+    await db.schema.dropIndex('taste_reputation_score_idx').execute()
+    await db.schema.dropTable('taste_reputation').execute()
+  },
+}
+
+migrations['013'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createTable('user_author_fatigue')
+      .addColumn('userDid', 'varchar', (col) => col.notNull())
+      .addColumn('authorDid', 'varchar', (col) => col.notNull())
+      .addColumn('serveCount', 'integer', (col) => col.notNull().defaultTo(0))
+      .addColumn('lastServedAt', 'varchar', (col) => col.notNull())
+      .addColumn('fatigueScore', 'real', (col) => col.notNull().defaultTo(0))
+      .addColumn('lastInteractionAt', 'varchar')
+      .addColumn('interactionCount', 'integer', (col) => col.notNull().defaultTo(0))
+      .addColumn('updatedAt', 'varchar', (col) => col.notNull())
+      .addPrimaryKeyConstraint('user_author_fatigue_pk', ['userDid', 'authorDid'])
+      .execute()
+
+    await db.schema
+      .createIndex('user_author_fatigue_userDid_idx')
+      .on('user_author_fatigue')
+      .column('userDid')
+      .execute()
+
+    await db.schema
+      .createIndex('user_author_fatigue_fatigue_idx')
+      .on('user_author_fatigue')
+      .columns(['userDid', 'fatigueScore'])
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropIndex('user_author_fatigue_userDid_idx').execute()
+    await db.schema.dropIndex('user_author_fatigue_fatigue_idx').execute()
+    await db.schema.dropTable('user_author_fatigue').execute()
+  },
+}
+
+migrations['014'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createTable('feed_debug_log')
+      .addColumn('userDid', 'varchar', (col) => col.notNull())
+      .addColumn('uri', 'varchar', (col) => col.notNull())
+      .addColumn('score', 'integer', (col) => col.notNull())
+      .addColumn('signals', 'text', (col) => col.notNull()) // JSON breakdown
+      .addColumn('servedAt', 'varchar', (col) => col.notNull())
+      .execute()
+
+    await db.schema
+      .createIndex('feed_debug_log_user_idx')
+      .on('feed_debug_log')
+      .column('userDid')
+      .execute()
+
+    await db.schema
+      .createIndex('feed_debug_log_servedAt_idx')
+      .on('feed_debug_log')
+      .column('servedAt')
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropTable('feed_debug_log').execute()
+  },
+}
+migrations['015'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .alterTable('post')
+      .addColumn('hasImage', 'boolean', (col) => col.defaultTo(0))
+      .execute()
+    await db.schema
+      .alterTable('post')
+      .addColumn('hasVideo', 'boolean', (col) => col.defaultTo(0))
+      .execute()
+    await db.schema
+      .alterTable('post')
+      .addColumn('hasExternal', 'boolean', (col) => col.defaultTo(0))
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema
+      .alterTable('post')
+      .dropColumn('hasImage')
+      .execute()
+    await db.schema
+      .alterTable('post')
+      .dropColumn('hasVideo')
+      .execute()
+    await db.schema
+      .alterTable('post')
+      .dropColumn('hasExternal')
+      .execute()
+  },
+}
+
+migrations['016'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .alterTable('user_author_fatigue')
+      .addColumn('affinityScore', 'double precision', (col) => col.defaultTo(1.0))
+      .execute()
+    await db.schema
+      .alterTable('user_author_fatigue')
+      .addColumn('interactionWeight', 'double precision', (col) => col.defaultTo(0.0))
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema
+      .alterTable('user_author_fatigue')
+      .dropColumn('affinityScore')
+      .execute()
+    await db.schema
+      .alterTable('user_author_fatigue')
+      .dropColumn('interactionWeight')
+      .execute()
+  },
+}

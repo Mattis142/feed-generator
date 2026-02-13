@@ -1,6 +1,8 @@
 import http from 'http'
 import events from 'events'
 import express from 'express'
+import { spawn } from 'child_process'
+import path from 'path'
 import { DidResolver, MemoryCache } from '@atproto/identity'
 import { createServer } from './lexicon'
 import feedGeneration from './methods/feed-generation'
@@ -11,6 +13,7 @@ import { JetstreamSubscription } from './subscription'
 import { AppContext, Config } from './config'
 import wellKnown from './well-known'
 import { GraphBuilder } from './services/graph-builder'
+import { cleanupOldTasteData } from './algos/taste-similarity'
 
 export class FeedGenerator {
   public app: express.Application
@@ -106,6 +109,26 @@ export class FeedGenerator {
       })
     }, 30 * 60 * 1000) // Every 30 minutes
 
+    // Start daily keywords extraction job
+    this.runDailyKeywords().catch(err => {
+      console.error('Initial runDailyKeywords failed', err)
+    })
+    setInterval(() => {
+      this.runDailyKeywords().catch(err => {
+        console.error('Periodic runDailyKeywords failed', err)
+      })
+    }, 24 * 60 * 60 * 1000) // Every 24 hours
+
+    // Start background cleanup for taste similarity data
+    this.cleanupTasteData().catch(err => {
+      console.error('Initial cleanupTasteData failed', err)
+    })
+    setInterval(() => {
+      this.cleanupTasteData().catch(err => {
+        console.error('Periodic cleanupTasteData failed', err)
+      })
+    }, 7 * 24 * 60 * 60 * 1000) // Every 7 days
+
     return this.server
   }
 
@@ -131,8 +154,17 @@ export class FeedGenerator {
         .where('servedAt', '<', sixHoursAgo)
         .executeTakeFirst()
 
+      // Cleanup seen posts older than 8 hours (longer retention for better fatigue tracking)
+      const eightHoursAgo = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString()
+      const cleanedSeen = await this.db.deleteFrom('user_seen_post')
+        .where('seenAt', '<', eightHoursAgo)
+        .executeTakeFirst()
+
       if (cleanedServed.numDeletedRows > 0) {
         console.log(`Pruned ${cleanedServed.numDeletedRows} old serving history entries.`)
+      }
+      if (cleanedSeen.numDeletedRows > 0) {
+        console.log(`Pruned ${cleanedSeen.numDeletedRows} old seen history entries.`)
       }
     } catch (err) {
       console.error('Failed to cleanup posts', err)
@@ -144,31 +176,76 @@ export class FeedGenerator {
       console.log('Refreshing wantedDids for graph subscription...')
       const graphBuilder = new GraphBuilder(this.db)
 
-      // For now, we refresh for the publisher DID (the owner)
-      // In a multi-user system, we'd iterate all whitelisted users.
-      const dids = await graphBuilder.getWantedDids(this.cfg.publisherDid)
+      // Build graphs for all whitelisted users
+      const allUsersToTrack = [this.cfg.publisherDid, ...this.cfg.whitelist]
+      const allDids = new Set<string>()
+
+      for (const userDid of allUsersToTrack) {
+        const userDids = await graphBuilder.getWantedDids(userDid)
+        userDids.forEach(did => allDids.add(did))
+      }
 
       // Update the second firehose (Connection B)
       const graphFirehose = this.firehoses[1]
       if (graphFirehose) {
-        // Jetstream URL length is limited. We'll track interactions for Layer 1 only,
-        // plus the publisher and any whitelisted users.
-        const layer1Dids = await this.db.selectFrom('graph_follow')
+        // Track Layer 1 follows for ALL users
+        const allLayer1Dids = await this.db.selectFrom('graph_follow')
           .select('followee')
-          .where('follower', '=', this.cfg.publisherDid)
+          .where('follower', 'in', allUsersToTrack)
           .execute()
 
-        const didsToTrack = new Set(layer1Dids.map(r => r.followee))
-        didsToTrack.add(this.cfg.publisherDid) // Always track the owner
-        this.cfg.whitelist.forEach(did => didsToTrack.add(did)) // Track whitelisted users
+        // Track high-reputation Taste Twins for ALL users to index their behaviors
+        const allTasteTwins = await this.db.selectFrom('taste_reputation')
+          .select('similarUserDid')
+          .where('userDid', 'in', allUsersToTrack)
+          .where('reputationScore', '>', 1.1) // Track anyone with positive reputation
+          .execute()
 
-        graphFirehose.config.wantedDids = Array.from(didsToTrack)
-        console.log(`Updated graph firehose with ${didsToTrack.size} Layer 1 DIDs. Restarting...`)
-        await graphFirehose.stop()
-        graphFirehose.run(this.cfg.subscriptionReconnectDelay)
+        const didsToTrack = new Set(allLayer1Dids.map(r => r.followee))
+        allTasteTwins.forEach(r => didsToTrack.add(r.similarUserDid))
+        allUsersToTrack.forEach(did => didsToTrack.add(did)) // Track all users themselves
+
+        console.log(`Updating graph firehose with ${didsToTrack.size} tracked DIDs (including taste twins)...`)
+        await graphFirehose.updateOptions({ wantedDids: Array.from(didsToTrack) })
       }
     } catch (err) {
       console.error('Failed to refresh wantedDids', err)
+    }
+  }
+
+  private async runDailyKeywords() {
+    try {
+      console.log('Running daily keywords extraction job...')
+      // Run the daily keywords script as a child process to avoid blocking the main server
+      const scriptPath = path.join(__dirname, '../scripts/daily-keywords.ts')
+      const child = spawn('ts-node', [scriptPath], {
+        stdio: 'inherit',
+        env: { ...process.env }
+      })
+
+      child.on('error', (err: Error) => {
+        console.error('Failed to spawn daily keywords process:', err)
+      })
+
+      child.on('exit', (code: number) => {
+        if (code === 0) {
+          console.log('Daily keywords extraction completed successfully')
+        } else {
+          console.error(`Daily keywords extraction exited with code ${code}`)
+        }
+      })
+    } catch (err) {
+      console.error('Failed to run daily keywords job', err)
+    }
+  }
+
+  private async cleanupTasteData() {
+    try {
+      console.log('Running background cleanup for taste similarity data...')
+      await cleanupOldTasteData({ db: this.db }, 90) // Keep 90 days of data
+      console.log('Taste similarity data cleanup completed')
+    } catch (err) {
+      console.error('Failed to cleanup taste data', err)
     }
   }
 }

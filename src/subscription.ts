@@ -1,5 +1,7 @@
 import { Database } from './db'
 import WebSocket from 'ws'
+import { updateTasteSimilarity } from './algos/taste-similarity'
+import { updateAuthorFatigueOnInteraction } from './algos/social-graph'
 
 export type JetstreamConfig = {
   wantedCollections: string[]
@@ -35,11 +37,10 @@ export class JetstreamSubscription {
       this.config.wantedCollections.forEach((c) =>
         urlObj.searchParams.append('wantedCollections', c),
       )
-      if (this.config.wantedDids && this.config.wantedDids.length > 0) {
-        this.config.wantedDids.forEach((d) =>
-          urlObj.searchParams.append('wantedDids', d),
-        )
-      }
+      // Never put DIDs in URL to avoid "400 Bad Request" (URL too long)
+      // Instead, we use requireHello=true and send them via a WebSocket message
+      urlObj.searchParams.append('requireHello', 'true')
+
       if (this.cursor) {
         urlObj.searchParams.append('cursor', this.cursor.toString())
       }
@@ -50,7 +51,8 @@ export class JetstreamSubscription {
       this.sub = new WebSocket(urlStr)
 
       this.sub.on('open', () => {
-        console.log(`Jetstream connected (${this.config.wantedCollections.join(', ')})`)
+        console.log(`Jetstream connected (${this.config.wantedCollections.join(', ')}). Sending options update...`)
+        this.sendOptionsUpdate()
       })
 
       this.sub.on('message', async (data: WebSocket.Data) => {
@@ -86,6 +88,13 @@ export class JetstreamSubscription {
       if (operation === 'create') {
         const replyRoot = record.reply?.root?.uri || null
         const replyParent = record.reply?.parent?.uri || null
+        const text = record.text || null
+
+        // Extract media flags
+        const embed = record.embed
+        const hasImage = embed?.$type === 'app.bsky.embed.images' || (embed?.$type === 'app.bsky.embed.recordWithMedia' && embed?.media?.$type === 'app.bsky.embed.images')
+        const hasVideo = embed?.$type === 'app.bsky.embed.video' || (embed?.$type === 'app.bsky.embed.recordWithMedia' && embed?.media?.$type === 'app.bsky.embed.video')
+        const hasExternal = embed?.$type === 'app.bsky.embed.external'
 
         await this.db
           .insertInto('post')
@@ -99,6 +108,10 @@ export class JetstreamSubscription {
             repostCount: 0,
             replyRoot,
             replyParent,
+            text,
+            hasImage: hasImage ? 1 : 0,
+            hasVideo: hasVideo ? 1 : 0,
+            hasExternal: hasExternal ? 1 : 0,
           })
           .onConflict((oc) => oc.doNothing())
           .execute()
@@ -136,6 +149,23 @@ export class JetstreamSubscription {
           })
             .onConflict((oc) => oc.doNothing())
             .execute()
+
+          // Update taste similarity for all users
+          try {
+            // Create a minimal context-like object for the taste similarity function
+            const ctx = { db: this.db }
+            await updateTasteSimilarity(ctx, did, subjectUri, 'like')
+          } catch (err) {
+            console.error('[Taste Similarity] Failed to update taste similarity:', err)
+          }
+
+          // Update author fatigue for like interactions
+          try {
+            const ctx = { db: this.db }
+            await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'like')
+          } catch (err) {
+            console.error('[Author Fatigue] Failed to update fatigue for like:', err)
+          }
         }
       }
     } else if (collection === 'app.bsky.feed.repost') {
@@ -159,6 +189,36 @@ export class JetstreamSubscription {
           })
             .onConflict((oc) => oc.doNothing())
             .execute()
+
+          // Update author fatigue for repost interactions
+          try {
+            const ctx = { db: this.db }
+            await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'repost')
+          } catch (err) {
+            console.error('[Author Fatigue] Failed to update fatigue for repost:', err)
+          }
+        }
+      }
+    } else if (collection === 'app.bsky.feed.post' && operation === 'create' && record.reply) {
+      // Handle reply interactions (when someone replies to a post)
+      const replyParent = record.reply?.parent?.uri
+      if (replyParent) {
+        await this.db.insertInto('graph_interaction').values({
+          actor: did,
+          target: replyParent,
+          type: 'reply',
+          weight: 1,
+          indexedAt: new Date().toISOString(),
+        })
+          .onConflict((oc) => oc.doNothing())
+          .execute()
+
+        // Update author fatigue for reply interactions
+        try {
+          const ctx = { db: this.db }
+          await updateAuthorFatigueOnInteraction(ctx, did, replyParent, 'reply')
+        } catch (err) {
+          console.error('[Author Fatigue] Failed to update fatigue for reply:', err)
         }
       }
     }
@@ -176,12 +236,36 @@ export class JetstreamSubscription {
       .execute()
   }
 
+  public sendOptionsUpdate() {
+    if (!this.sub || this.sub.readyState !== WebSocket.OPEN) return
+    const message = {
+      type: 'options_update',
+      payload: {
+        wantedCollections: this.config.wantedCollections,
+        wantedDids: this.config.wantedDids || [],
+        maxMessageSizeBytes: 0, // 0 = no limit, explicitly matching documentation example
+      },
+    }
+    this.sub.send(JSON.stringify(message))
+  }
+
+  public async updateOptions(config: Partial<JetstreamConfig>) {
+    this.config = { ...this.config, ...config }
+    this.sendOptionsUpdate()
+  }
+
   async stop() {
     if (this.sub) {
-      // Only terminate if the WebSocket is actually connected or connecting
-      // WebSocket ready states: CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3
+      // Remove listeners to prevent 'error' or 'close' from firing during planned termination
+      this.sub.removeAllListeners()
+      this.sub.on('error', () => { }) // Swallow any terminal errors
+
       if (this.sub.readyState === WebSocket.CONNECTING || this.sub.readyState === WebSocket.OPEN) {
-        this.sub.terminate()
+        try {
+          this.sub.terminate()
+        } catch (e) {
+          // Ignore state-change race conditions
+        }
       }
       this.sub = undefined
     }

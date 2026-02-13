@@ -5,6 +5,7 @@ import algos from '../algos'
 import { validateAuth } from '../auth'
 import { AtUri } from '@atproto/syntax'
 import { GraphBuilder } from '../services/graph-builder'
+import { updateAuthorFatigueOnServe } from '../algos/social-graph'
 
 export default function (server: Server, ctx: AppContext) {
   server.app.bsky.feed.getFeedSkeleton(async ({ params, req }) => {
@@ -50,6 +51,7 @@ export default function (server: Server, ctx: AppContext) {
       // Record served posts for fatigue memory (background)
       const servedUris = body.feed.map(f => f.post)
       if (servedUris.length > 0) {
+        // Record post-level serving
         ctx.db.insertInto('user_served_post')
           .values(servedUris.map(uri => ({
             userDid: requesterDid,
@@ -58,6 +60,19 @@ export default function (server: Server, ctx: AppContext) {
           })))
           .execute()
           .catch(err => console.error('Failed to record served posts', err))
+        
+        // Record author-level fatigue tracking (background)
+        servedUris.forEach(async (uri) => {
+          try {
+            const parts = uri.replace('at://', '').split('/')
+            if (parts[0]?.startsWith('did:')) {
+              const authorDid = parts[0]
+              await updateAuthorFatigueOnServe(ctx, requesterDid, authorDid, uri)
+            }
+          } catch (err) {
+            console.error('Failed to update author fatigue on serve:', err)
+          }
+        })
       }
 
       console.log(`Sucessfully generated feed for ${requesterDid} with ${body.feed.length} items`)

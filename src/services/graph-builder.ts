@@ -112,4 +112,17 @@ export class GraphBuilder {
 
         return Array.from(new Set([userDid, ...l1Dids, ...l2Dids]))
     }
+
+    async getPostLikers(postUri: string, limit: number = 50): Promise<string[]> {
+        console.log(`[GraphBuilder] Fetching likers for ${postUri} (limit: ${limit})...`)
+        try {
+            const res = await this.agent.getLikes({ uri: postUri, limit })
+            const likerDids = res.data.likes.map(l => l.actor.did)
+            console.log(`[GraphBuilder] Found ${likerDids.length} likers for ${postUri}`)
+            return likerDids
+        } catch (e) {
+            console.error(`[GraphBuilder] Failed to fetch likers for ${postUri}`, e)
+            return []
+        }
+    }
 }
