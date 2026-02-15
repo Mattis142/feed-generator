@@ -1,5 +1,8 @@
 import { AppContext } from '../config'
 import { Database } from '../db'
+import { AtpAgent } from '@atproto/api'
+
+const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
 
 // Track taste similarity between users based on co-liked posts
 export async function updateTasteSimilarity(
@@ -24,29 +27,8 @@ export async function updateTasteSimilarity(
   for (const coLiker of coLikers) {
     const similarUserDid = coLiker.actor
 
-    // Update taste similarity record
-    const existing = await ctx.db
-      .selectFrom('taste_similarity')
-      .selectAll()
-      .where('userDid', '=', userDid)
-      .where('similarUserDid', '=', similarUserDid)
-      .executeTakeFirst()
-
-    if (existing) {
-      // Update existing similarity
-      await ctx.db
-        .updateTable('taste_similarity')
-        .set({
-          agreementCount: existing.agreementCount + 1,
-          totalCoLikedPosts: existing.totalCoLikedPosts + 1,
-          lastAgreementAt: now,
-          updatedAt: now
-        })
-        .where('userDid', '=', userDid)
-        .where('similarUserDid', '=', similarUserDid)
-        .execute()
-    } else {
-      // Create new similarity record
+    // Use upsert to handle race conditions
+    try {
       await ctx.db
         .insertInto('taste_similarity')
         .values({
@@ -57,11 +39,51 @@ export async function updateTasteSimilarity(
           lastAgreementAt: now,
           updatedAt: now
         })
+        .onConflict((oc) => oc
+          .columns(['userDid', 'similarUserDid'])
+          .doUpdateSet({
+            agreementCount: (eb) => eb('agreementCount', '+', 1),
+            totalCoLikedPosts: (eb) => eb('totalCoLikedPosts', '+', 1),
+            lastAgreementAt: now,
+            updatedAt: now
+          })
+        )
         .execute()
+    } catch (err: any) {
+      if (err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        // Record was updated by another process, which is fine
+        console.log(`[Taste Similarity] Race condition handled for ${userDid.slice(0, 10)} and ${similarUserDid.slice(0, 10)}`)
+      } else {
+        console.error(`[Taste Similarity] Error updating similarity for ${userDid.slice(0, 10)}:`, err)
+      }
     }
 
     // Update reputation score
     await updateTasteReputation(ctx, userDid, similarUserDid, 'agreement')
+  }
+
+  // EXTERNAL DISCOVERY: Find co-likers from the wider network via API
+  // This allows us to find "Taste Twins" we aren't currently tracking
+  try {
+    const res = await publicAgent.getLikes({ uri: postUri, limit: 100 })
+    if (res.success) {
+      const externalDids = res.data.likes
+        .map(l => l.actor.did)
+        .filter(did => did !== userDid)
+
+      for (const extDid of externalDids) {
+        // Just directly update/create reputation for these users
+        // This makes them eligible for firehose tracking in the next refresh
+        await updateTasteReputation(ctx, userDid, extDid, 'agreement')
+      }
+
+      if (externalDids.length > 0) {
+        console.log(`[Taste Discovery] Found ${externalDids.length} external co-likers for discovery on ${postUri.slice(-10)}`)
+      }
+    }
+  } catch (err) {
+    // Silently fail API discovery if rate limited or network error
+    console.error(`[Taste Discovery] API discovery failed for ${postUri.slice(-10)}`)
   }
 }
 
@@ -74,7 +96,7 @@ export async function updateTasteReputation(
 ) {
   const now = new Date().toISOString()
 
-  const existing = await ctx.db
+  let existing = await ctx.db
     .selectFrom('taste_reputation')
     .selectAll()
     .where('userDid', '=', userDid)
@@ -82,22 +104,46 @@ export async function updateTasteReputation(
     .executeTakeFirst()
 
   if (!existing) {
-    // Create new reputation record
-    const initialScore = action === 'agreement' ? 1.2 : 0.8
-    await ctx.db
-      .insertInto('taste_reputation')
-      .values({
-        userDid,
-        similarUserDid,
-        reputationScore: initialScore,
-        agreementHistory: action === 'agreement' ? 1 : (action === 'disagreement' ? -1 : 0),
-        lastSeenAt: now,
-        decayRate: 0.95, // Default decay rate
-        updatedAt: now
-      })
-      .execute()
-    return
+    // Create new reputation record with a try-catch for race conditions
+    try {
+      const initialScore = action === 'agreement' ? 1.2 : 0.8
+      await ctx.db
+        .insertInto('taste_reputation')
+        .values({
+          userDid,
+          similarUserDid,
+          reputationScore: initialScore,
+          agreementHistory: action === 'agreement' ? 1 : (action === 'disagreement' ? -1 : 0),
+          lastSeenAt: now,
+          decayRate: 0.95, // Default decay rate
+          updatedAt: now
+        })
+        .execute()
+      return
+    } catch (err: any) {
+      if (err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        // Someone else inserted it, just continue to update
+        console.log(`[Taste Reputation] Race condition during insert, falling back to update for ${userDid.slice(0, 10)}`)
+        // Re-fetch to get the record for update
+        const reFetched = await ctx.db
+          .selectFrom('taste_reputation')
+          .selectAll()
+          .where('userDid', '=', userDid)
+          .where('similarUserDid', '=', similarUserDid)
+          .executeTakeFirst()
+        if (!reFetched) return // Shoudn't happen
+
+        // continue below with reFetched logic
+        // We'll jump to the update part by re-setting variables
+        existing = reFetched as any
+      } else {
+        throw err
+      }
+    }
   }
+
+  // Double check existing again because we might have re-fetched in catch
+  if (!existing) return
 
   let newScore = existing.reputationScore
   let newHistory = existing.agreementHistory

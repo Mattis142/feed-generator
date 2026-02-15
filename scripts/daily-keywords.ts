@@ -106,7 +106,8 @@ const run = async () => {
 
       // Fetch liked posts via listRecords (no auth required)
       const likedTexts: string[] = []
-      let mediaLikesCount = 0
+      let imageLikesCount = 0
+      let videoLikesCount = 0
       let totalLikesWithMediaInfo = 0
       let cursor: string | undefined = undefined
       let fetchedCount = 0
@@ -148,12 +149,15 @@ const run = async () => {
 
               // New: Extract media info for preference tracking
               const embed = (post as any)?.record?.embed
-              const hasMedia = embed?.$type === 'app.bsky.embed.images' ||
-                embed?.$type === 'app.bsky.embed.video' ||
+              const hasImage = embed?.$type === 'app.bsky.embed.images' ||
                 (embed?.$type === 'app.bsky.embed.recordWithMedia' &&
-                  (embed?.media?.$type === 'app.bsky.embed.images' || embed?.media?.$type === 'app.bsky.embed.video'))
+                  embed?.media?.$type === 'app.bsky.embed.images')
+              const hasVideo = embed?.$type === 'app.bsky.embed.video' ||
+                (embed?.$type === 'app.bsky.embed.recordWithMedia' &&
+                  embed?.media?.$type === 'app.bsky.embed.video')
 
-              if (hasMedia) mediaLikesCount++
+              if (hasImage) imageLikesCount++
+              if (hasVideo) videoLikesCount++
               totalLikesWithMediaInfo++
             }
           } catch (postErr) {
@@ -177,8 +181,10 @@ const run = async () => {
       }
 
       console.log(`  Found ${likedTexts.length} liked posts with text`)
-      const historicalMediaRatio = totalLikesWithMediaInfo > 0 ? mediaLikesCount / totalLikesWithMediaInfo : 0.5
-      console.log(`  Historical media ratio: ${historicalMediaRatio.toFixed(2)} (${mediaLikesCount}/${totalLikesWithMediaInfo} posts)`)
+      const historicalImageRatio = totalLikesWithMediaInfo > 0 ? imageLikesCount / totalLikesWithMediaInfo : 0.25
+      const historicalVideoRatio = totalLikesWithMediaInfo > 0 ? videoLikesCount / totalLikesWithMediaInfo : 0.25
+      console.log(`  Historical image ratio: ${historicalImageRatio.toFixed(2)} (${imageLikesCount}/${totalLikesWithMediaInfo} posts)`)
+      console.log(`  Historical video ratio: ${historicalVideoRatio.toFixed(2)} (${videoLikesCount}/${totalLikesWithMediaInfo} posts)`)
 
       // Write liked texts to file
       const likedCorpusPath = join(tempDir, `liked_${userDid.replace(/:/g, '_')}.txt`)
@@ -228,15 +234,22 @@ const run = async () => {
       const now = new Date().toISOString()
       const seenKeywords = new Set<string>()
 
-      // Merge new keywords and apply decay
+      // Merge new keywords and apply parabolic decay curve
       for (const { keyword, score } of keywordScores) {
         seenKeywords.add(keyword)
         const existingScore = existingMap.get(keyword)
-        const newScore = existingScore !== undefined
-          ? 0.8 * existingScore + score  // Merge: 0.8 * old + new
-          : score  // New keyword
-
+        
+        let decayFactor
         if (existingScore !== undefined) {
+          // Parabolic decay: extremes decay slower, middle decays faster
+          // Peak decay at middle (around 0), slower at extremes (-1 and +1)
+          const absScore = Math.abs(existingScore)
+          const parabolicFactor = 1 - (1 - absScore) * (1 - absScore) // 0.0 to 1.0
+          const maxDecay = 0.15 // 15% peak decay at middle
+          const minDecay = 0.03 // 3% decay at extremes
+          decayFactor = 1 - (minDecay + (maxDecay - minDecay) * parabolicFactor)
+          
+          const newScore = decayFactor * existingScore + score
           // Update existing keyword
           await db
             .updateTable('user_keyword')
@@ -248,15 +261,11 @@ const run = async () => {
             .where('keyword', '=', keyword)
             .execute()
         } else {
-          // Insert new keyword
+          // New keyword - no decay
+          decayFactor = 1.0
           await db
             .insertInto('user_keyword')
-            .values({
-              userDid,
-              keyword,
-              score: newScore,
-              updatedAt: now,
-            })
+            .values({ userDid, keyword, score, updatedAt: now })
             .execute()
         }
       }
@@ -264,8 +273,15 @@ const run = async () => {
       // Apply passive decay to keywords not seen today
       for (const [keyword, oldScore] of existingMap.entries()) {
         if (!seenKeywords.has(keyword)) {
-          const newScore = oldScore * 0.9  // Passive decay
-          if (newScore < 0.1) {
+          // Apply same parabolic decay curve
+          const absScore = Math.abs(oldScore)
+          const parabolicFactor = 1 - (1 - absScore) * (1 - absScore) // 0.0 to 1.0
+          const maxDecay = 0.15 // 15% peak decay at middle
+          const minDecay = 0.03 // 3% decay at extremes
+          const decayFactor = 1 - (minDecay + (maxDecay - minDecay) * parabolicFactor)
+          
+          const newScore = oldScore * decayFactor
+          if (Math.abs(newScore) < 0.1) {
             // Prune: delete keywords below threshold
             await db
               .deleteFrom('user_keyword')

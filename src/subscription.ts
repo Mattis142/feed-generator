@@ -6,6 +6,7 @@ import { updateAuthorFatigueOnInteraction } from './algos/social-graph'
 export type JetstreamConfig = {
   wantedCollections: string[]
   wantedDids?: string[]
+  trackedDids?: Set<string> // Users whose fatigue/interactions we actually want to track
 }
 
 export class JetstreamSubscription {
@@ -152,9 +153,11 @@ export class JetstreamSubscription {
 
           // Update taste similarity for all users
           try {
-            // Create a minimal context-like object for the taste similarity function
             const ctx = { db: this.db }
-            await updateTasteSimilarity(ctx, did, subjectUri, 'like')
+            // ONLY track similarity for our own users
+            if (!this.config.trackedDids || this.config.trackedDids.has(did)) {
+              await updateTasteSimilarity(ctx, did, subjectUri, 'like')
+            }
           } catch (err) {
             console.error('[Taste Similarity] Failed to update taste similarity:', err)
           }
@@ -162,7 +165,10 @@ export class JetstreamSubscription {
           // Update author fatigue for like interactions
           try {
             const ctx = { db: this.db }
-            await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'like')
+            // ONLY track fatigue for our own users, not everyone we follow
+            if (!this.config.trackedDids || this.config.trackedDids.has(did)) {
+              await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'like')
+            }
           } catch (err) {
             console.error('[Author Fatigue] Failed to update fatigue for like:', err)
           }
@@ -193,7 +199,10 @@ export class JetstreamSubscription {
           // Update author fatigue for repost interactions
           try {
             const ctx = { db: this.db }
-            await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'repost')
+            // ONLY track fatigue for our own users, not everyone we follow
+            if (!this.config.trackedDids || this.config.trackedDids.has(did)) {
+              await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'repost')
+            }
           } catch (err) {
             console.error('[Author Fatigue] Failed to update fatigue for repost:', err)
           }
@@ -216,7 +225,10 @@ export class JetstreamSubscription {
         // Update author fatigue for reply interactions
         try {
           const ctx = { db: this.db }
-          await updateAuthorFatigueOnInteraction(ctx, did, replyParent, 'reply')
+          // ONLY track fatigue for our own users, not everyone we follow
+          if (!this.config.trackedDids || this.config.trackedDids.has(did)) {
+            await updateAuthorFatigueOnInteraction(ctx, did, replyParent, 'reply')
+          }
         } catch (err) {
           console.error('[Author Fatigue] Failed to update fatigue for reply:', err)
         }

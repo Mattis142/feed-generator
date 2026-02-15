@@ -464,3 +464,42 @@ migrations['016'] = {
       .execute()
   },
 }
+
+migrations['017'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createTable('user_candidate_batch')
+      .addColumn('userDid', 'varchar', (col) => col.notNull())
+      .addColumn('uri', 'varchar', (col) => col.notNull())
+      .addColumn('semanticScore', 'double precision', (col) => col.notNull())
+      .addColumn('pipelineScore', 'double precision', (col) => col.notNull().defaultTo(0))
+      .addColumn('centroidId', 'integer', (col) => col.notNull().defaultTo(0))
+      .addColumn('batchId', 'varchar', (col) => col.notNull())
+      .addColumn('generatedAt', 'varchar', (col) => col.notNull())
+      .execute()
+
+    // Index for reading batches by user, ordered by recency
+    await db.schema
+      .createIndex('idx_candidate_batch_user_time')
+      .on('user_candidate_batch')
+      .columns(['userDid', 'generatedAt'])
+      .execute()
+
+    // Index for reading batches by user, ordered by score
+    await db.schema
+      .createIndex('idx_candidate_batch_user_score')
+      .on('user_candidate_batch')
+      .columns(['userDid', 'semanticScore'])
+      .execute()
+
+    // Index for cleanup by batch age
+    await db.schema
+      .createIndex('idx_candidate_batch_generated')
+      .on('user_candidate_batch')
+      .columns(['generatedAt'])
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropTable('user_candidate_batch').execute()
+  },
+}

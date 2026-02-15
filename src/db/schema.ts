@@ -12,6 +12,7 @@ export type DatabaseSchema = {
   taste_reputation: TasteReputation
   user_author_fatigue: UserAuthorFatigue
   feed_debug_log: FeedDebugLog
+  user_candidate_batch: UserCandidateBatch
 }
 
 export type Post = {
@@ -120,4 +121,14 @@ export type FeedDebugLog = {
   score: number
   signals: string // JSON string containing the breakdown
   servedAt: string
+}
+
+export type UserCandidateBatch = {
+  userDid: string
+  uri: string
+  semanticScore: number    // cosine similarity (0-1) from Qdrant
+  pipelineScore: number    // original pipeline score from batch run
+  centroidId: number       // which interest cluster matched
+  batchId: string          // UUID identifying this batch
+  generatedAt: string      // ISO timestamp — used for linear decay
 }

@@ -56,24 +56,26 @@ function applyAccountDiversity(posts: Array<{ post: any; score: number; signals?
     result.push(...remainingPosts)
 
     console.log(`[Account Diversity] Reordered ${posts.length} posts to prevent consecutive authors`)
-    return result
+
+    // Final safety: if diversity logic accidentally killed the pool size, return the original
+    return result.length < posts.length * 0.5 ? posts : result
 }
 
 export const shortname = 'social-graph'
+
+export type HandlerOptions = {
+    batchMode?: boolean  // If true: looser thresholds, no fatigue, return full pool
+}
 
 export const handler = async (
     ctx: AppContext,
     params: QueryParams,
     requesterDid: string,
+    options: HandlerOptions = {},
 ) => {
+    const { batchMode = false } = options
+
     const now = new Date().toISOString()
-    // 0. Debug Log Cleanup (Keeping only last 5 minutes as requested)
-    const debugRetentionLimit = new Date(Date.now() - 5 * 60 * 1000).toISOString()
-    await ctx.db
-        .deleteFrom('feed_debug_log')
-        .where('servedAt', '<', debugRetentionLimit)
-        .execute()
-        .catch(err => console.error(`[Debug Cleanup Error] ${err}`))
 
     // 1. Fetch user's graph (Layer 1 and Layer 2)
     const layer1Rows = await ctx.db
@@ -193,15 +195,15 @@ export const handler = async (
         }
     }
 
-    // 1.8. Serving Fatigue (Memory) + User Interaction Tracking
-    // Fetch posts the user has been SERVED in the last 6 hours for better fatigue tracking
-    // Note: We use user_served_post instead of user_seen_post since it's more reliably tracked
+    // 1.8. InteractionSeen Fatigue (Memory) + User Interaction Tracking
+    // Fetch posts the user has actually SEEN in the last 6 hours for accurate fatigue tracking
+    // Note: We use user_seen_post based on InteractionSeen API for precise view tracking
     const fatigueLookback = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
-    const servedPosts = await ctx.db
-        .selectFrom('user_served_post')
-        .select(['uri', 'servedAt'])
+    const seenPosts = await ctx.db
+        .selectFrom('user_seen_post')
+        .select(['uri', 'seenAt'])
         .where('userDid', '=', requesterDid)
-        .where('servedAt', '>', fatigueLookback)
+        .where('seenAt', '>', fatigueLookback)
         .execute()
 
     // Fetch posts the user has already interacted with (likes, reposts, replies)
@@ -212,21 +214,21 @@ export const handler = async (
         .where('type', 'in', ['like', 'repost', 'reply'])
         .execute()
 
-    const servedCountMap: Record<string, number> = {}
-    const servedTimeMap: Record<string, string> = {}
+    const seenCountMap: Record<string, number> = {}
+    const seenTimeMap: Record<string, string> = {}
     const userInteractionMap: Record<string, string> = {} // Track interaction type
 
-    servedPosts.forEach(sp => {
-        servedCountMap[sp.uri] = (servedCountMap[sp.uri] || 0) + 1
-        servedTimeMap[sp.uri] = sp.servedAt
+    seenPosts.forEach(sp => {
+        seenCountMap[sp.uri] = (seenCountMap[sp.uri] || 0) + 1
+        seenTimeMap[sp.uri] = sp.seenAt
     })
 
     userInteractions.forEach(ui => {
         userInteractionMap[ui.target] = ui.type
     })
 
-    // 2.0. Taste Similarity Analysis - Find users with similar tastes (MOVED UP for Bucketing)
-    const tasteSimilarUsers = await getTasteSimilarUsers(ctx, requesterDid, 50)
+    // 2.0. Taste Similarity Analysis - Find users with similar tastes (Increased to 100 for better discovery)
+    const tasteSimilarUsers = await getTasteSimilarUsers(ctx, requesterDid, 100)
     console.log(`[Taste Similarity] Found ${tasteSimilarUsers.length} taste-similar users`)
 
     // Get posts liked by taste-similar users in the last 72 hours
@@ -251,12 +253,15 @@ export const handler = async (
         .limit(100)
         .execute()
 
-    let mediaCount = 0
+    let imageCount = 0
+    let videoCount = 0
     recentLikes.forEach(l => {
-        if (l.hasImage || l.hasVideo) mediaCount++
+        if (l.hasImage) imageCount++
+        if (l.hasVideo) videoCount++
     })
-    const mediaRatio = recentLikes.length > 0 ? mediaCount / recentLikes.length : 0.5
-    console.log(`[Media Preference] User ${requesterDid.slice(0, 10)} has media ratio: ${mediaRatio.toFixed(2)} (${mediaCount}/${recentLikes.length} media posts)`)
+    const imageRatio = recentLikes.length > 0 ? imageCount / recentLikes.length : 0.25
+    const videoRatio = recentLikes.length > 0 ? videoCount / recentLikes.length : 0.25
+    console.log(`[Media Preference] User ${requesterDid.slice(0, 10)} has image ratio: ${imageRatio.toFixed(2)} (${imageCount}/${recentLikes.length}) and video ratio: ${videoRatio.toFixed(2)} (${videoCount}/${recentLikes.length})`)
 
     // 2.5. Discovery & Scoring Pipeline: Global Mix (Anti-Chronological)
     const lookback72h = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString()
@@ -273,9 +278,9 @@ export const handler = async (
             eb('author', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy']),
             eb('author', 'in', Array.from(layer2Dids).length > 0 ? Array.from(layer2Dids) : ['dummy']),
             eb('author', 'in', Array.from(interactedDids).length > 0 ? Array.from(interactedDids) : ['dummy']),
-            eb('likeCount', '>', 2) // RESTORED: Limited global discovery
+            eb('likeCount', '>', batchMode ? 0 : 2) // Looser in batch mode
         ]))
-        .limit(1200) // Increased for infinite scroll
+        .limit(batchMode ? 3000 : 1200)
         .execute()
 
     // Apply multi-factor scoring with jitter
@@ -351,20 +356,20 @@ export const handler = async (
         .selectFrom('post')
         .selectAll()
         .where('indexedAt', '>', lookback30d)
-        .where('likeCount', '>', 1) // RESTORED condition
-        .limit(1000) // Increased for infinite scroll
+        .where('likeCount', '>', batchMode ? 0 : 1) // Looser in batch mode
+        .limit(batchMode ? 5000 : 1000)
         .execute()
 
     // 2. Fetch "Taste" candidates (Personalized Discovery)
     let tasteRaw: typeof bucket1Raw = []
     if (tasteSimilarPostMap.size > 0) {
-        const tasteUris = Array.from(tasteSimilarPostMap.keys()).slice(0, 600) // Increased limit
+        const tasteUris = Array.from(tasteSimilarPostMap.keys()).slice(0, 2000) // Increased limit
         if (tasteUris.length > 0) {
             tasteRaw = await ctx.db
                 .selectFrom('post')
                 .selectAll()
                 .where('uri', 'in', tasteUris)
-                .limit(600) // Increased limit
+                .limit(2000) // Increased limit
                 .execute()
         }
     }
@@ -392,7 +397,7 @@ export const handler = async (
             return { post, score: likeScore + timeScore + velocityScore }
         })
         .sort((a, b) => b.score - a.score)
-        .slice(0, 1600) // Increased for infinite scroll
+        .slice(0, batchMode ? 3000 : 1600) // Increased for infinite scroll
         .map(item => item.post)
 
     // bucket 3: Bubble Highlights (Last 30 days, from closest circle only)
@@ -551,7 +556,7 @@ export const handler = async (
     console.log(`[OP Boost] Calculated boosts for ${Object.keys(opBoostMap).length} original posts`)
     console.log(`[Self-Reply Chains] Found ${Object.keys(selfReplyChains).length} potential self-reply chains`)
     console.log(`[User Interactions] Found ${userInteractions.length} user interactions (${userInteractions.filter(ui => ui.type === 'like').length} likes, ${userInteractions.filter(ui => ui.type === 'repost').length} reposts, ${userInteractions.filter(ui => ui.type === 'reply').length} replies)`)
-    console.log(`[Serving Fatigue] Found ${servedPosts.length} recently served posts for ${requesterDid.slice(0, 10)}...`)
+    console.log(`[InteractionSeen Fatigue] Found ${seenPosts.length} recently seen posts for ${requesterDid.slice(0, 10)}...`)
 
     // Load user keywords for interest boosting
     const userKeywords = await ctx.db
@@ -684,8 +689,8 @@ export const handler = async (
         // 1. Taste Similarity Boost
         if (tasteData) {
             // Significant boost to overcome sandbox penalty for "sole reason" of taste agreement
-            tasteBoost = tasteData.boostScore * 1500
-            const consensusMultiplier = Math.min(3.0, 1 + (tasteData.similarUserDids.length - 1) * 0.5)
+            tasteBoost = tasteData.boostScore * 2500 // Increased from 1500
+            const consensusMultiplier = Math.min(4.0, 1 + (tasteData.similarUserDids.length - 1) * 0.8) // More aggressive consensus boost
             tasteBoost *= consensusMultiplier
             discoveryMatch = true
         }
@@ -699,8 +704,8 @@ export const handler = async (
                 if (regex.test(textLower)) {
                     hasKeywordMatch = true
                     discoveryMatch = true
-                    // Multiplier: 500x for outsiders (reduced from 1000x), 50x for insiders
-                    const multiplier = isOutsideSocialGraph ? 500 : 50
+                    // Multiplier: increased for discovery punch-through
+                    const multiplier = isOutsideSocialGraph ? (batchMode ? 800 : 1200) : 100
                     keywordBoost += kwWeight * multiplier
                 }
             }
@@ -710,13 +715,16 @@ export const handler = async (
         if (isOutsideSocialGraph) {
             // SANDBOX PENALTY: Always apply to "Cold" posts to ensure they need real merit to pass
             const viralSafety = (post.likeCount || 0) > 50
-            const basePenalty = viralSafety ? -2000 : -5000
+            const basePenalty = viralSafety ? -1500 : (batchMode ? -2000 : -4000) // Slightly reduced penalty for viral stuff
             score += basePenalty
             signals['sandbox_penalty'] = basePenalty
 
             // MEDIA PREFERENCE PENALTY: Penalize if post doesn't match user's media preference
-            const isMedia = post.hasImage || post.hasVideo
-            const mediaMismatch = (isMedia && mediaRatio < 0.3) || (!isMedia && mediaRatio > 0.7)
+            const hasImage = post.hasImage
+            const hasVideo = post.hasVideo
+            const imageMismatch = hasImage && imageRatio < 0.2
+            const videoMismatch = hasVideo && videoRatio < 0.2
+            const mediaMismatch = imageMismatch || videoMismatch
             if (mediaMismatch) {
                 const mediaPenalty = -1500
                 score += mediaPenalty
@@ -860,67 +868,38 @@ export const handler = async (
             }
         }
 
-        // Serving Fatigue Penalty (Progressive decay) - MUCH STRONGER PENALTIES
-        const servedCount = servedCountMap[post.uri] || 0
-        const lastServedAt = servedTimeMap[post.uri]
+        // InteractionSeen Fatigue Penalty - Permanent -50% multiplier per view
+        const seenCount = seenCountMap[post.uri] || 0
+        const lastSeenAt = seenTimeMap[post.uri]
         let fatiguePenalty = 0
 
-        if (servedCount > 0 && lastServedAt) {
-            const hoursSinceLastServed = (Date.now() - new Date(lastServedAt).getTime()) / (1000 * 60 * 60)
-
-            // MUCH STRONGER Progressive penalty: 1st seen=0, 2nd=-800, 3rd=-2000, 4th=-4000, 5th=-8000
-            if (servedCount >= 2) {
-                fatiguePenalty = -1500 * Math.pow(4.0, servedCount - 2) // Much more aggressive growth to kill repetition
-            }
-
-            // Time-based recovery: penalty reduces over time but MUCH slower
-            const recoveryFactor = Math.max(0.05, 1 - (hoursSinceLastServed / 24)) // Full recovery after 24 hours (was 8)
-            fatiguePenalty = Math.round(fatiguePenalty * recoveryFactor)
-
-            // Extra penalty for very recent re-seen content (within 15 minutes)
-            if (hoursSinceLastServed < 0.25) {
-                fatiguePenalty -= 1000 // Increased from 500
-                signals['fatigue_recent_view_penalty'] = -1000
-            }
-
-            // SPECIAL PENALTY: Posts with 0 likes that are seen multiple times get EXTRA penalty
-            if ((post.likeCount || 0) === 0 && servedCount >= 3) {
-                fatiguePenalty -= 2000 // Heavy penalty for repeatedly showing zero-engagement posts
-                signals['fatigue_zero_engagement_penalty'] = -2000
-                // Only log extreme zero engagement penalties (> 12 serves)
-                if (servedCount >= 12) {
-                    console.log(`[Zero Engagement Fatigue] Extra -2000 penalty for post served ${servedCount} times with 0 likes: ${post.uri.slice(-10)}`)
-                }
-            }
-
-            // SPECIAL PENALTY: Direct follow posts (Layer 1) that are seen multiple times get EXTRA penalty
-            if (isLayer1 && servedCount >= 4) {
-                const directFollowPenalty = -1500 * (servedCount - 1) // -1500 for 2nd view, -3000 for 3rd, etc.
-                fatiguePenalty += directFollowPenalty
-                signals['fatigue_direct_follow_extra'] = directFollowPenalty
-                console.log(`[Direct Follow Fatigue] ${directFollowPenalty} penalty for Layer 1 post served ${servedCount} times: ${post.uri.slice(-10)}`)
+        if (seenCount > 0 && lastSeenAt && !batchMode) {
+            // Apply permanent -50% multiplier per view
+            const seenMultiplier = Math.pow(0.5, seenCount) // 0.5^seenCount
+            score *= seenMultiplier
+            fatiguePenalty = Math.round(score * (1 - seenMultiplier)) // Track penalty amount
+            signals['seen_fatigue_multiplier'] = Math.round(seenMultiplier * 1000) / 1000
+            signals['seen_fatigue_penalty'] = fatiguePenalty
+            
+            // Log significant fatigue penalties
+            if (seenCount >= 2) {
+                console.log(`[InteractionSeen Fatigue] Applied ${Math.round(seenMultiplier * 100)}% score (${seenCount} views): ${post.uri.slice(-10)}`)
             }
         }
 
-        if (fatiguePenalty !== 0) {
-            score += fatiguePenalty
-            signals['serving_fatigue'] = fatiguePenalty
-            const hoursSinceLastServed = lastServedAt ? (Date.now() - new Date(lastServedAt).getTime()) / (1000 * 60 * 60) : 0
-            // Only log extreme fatigue penalties (> 10000)
-            if (Math.abs(fatiguePenalty) > 10000) {
-                console.log(`[Fatigue Penalty] ${fatiguePenalty} for post served ${servedCount} times (${hoursSinceLastServed.toFixed(1)}h since last served): ${post.uri.slice(-10)}`)
-            }
-        }
-
-        // User Author Fatigue Penalty
+        // Ensure posts can NEVER fully recover from over-serving penalties
         const authorFatigue = authorFatigueMap[post.author]
         if (authorFatigue) {
             let authorFatiguePenalty = 0
 
+            // Anti-fatigue bonus for negative scores (authors you engage with frequently)
+            if (authorFatigue.fatigueScore < 0) {
+                authorFatiguePenalty = Math.round(Math.abs(authorFatigue.fatigueScore) * 50) // Bonus points
+            }
             // Base fatigue penalty based on fatigue score (0-100 scale)
-            if (authorFatigue.fatigueScore > 20) {
-                // Exponential penalty based on fatigue score
-                authorFatiguePenalty = -Math.round(Math.pow(authorFatigue.fatigueScore / 10, 2) * 100)
+            else if (authorFatigue.fatigueScore > 40) { // Increased threshold from 20 to 40
+                // Linear penalty instead of exponential to be "a lot less aggressive"
+                authorFatiguePenalty = -Math.round((authorFatigue.fatigueScore - 30) * 80)
 
                 // Extra penalty if no recent interaction with this author
                 const hoursSinceLastInteraction = authorFatigue.lastInteractionAt
@@ -946,8 +925,8 @@ export const handler = async (
                 authorFatiguePenalty = Math.round(authorFatiguePenalty)
                 score += authorFatiguePenalty
                 signals['author_fatigue'] = authorFatiguePenalty
-                // Only log extreme author fatigue penalties (> 3000)
-                if (Math.abs(authorFatiguePenalty) > 3000) {
+                // Silenced log spam: only log if it's truly massive (> 20000)
+                if (Math.abs(authorFatiguePenalty) > 20000) {
                     console.log(`[Author Fatigue] ${authorFatiguePenalty} penalty for author ${post.author.slice(-10)} (fatigue: ${authorFatigue.fatigueScore.toFixed(1)})`)
                 }
             }
@@ -995,17 +974,7 @@ export const handler = async (
             }
         }
 
-        // Ensure posts can NEVER fully recover from over-serving penalties
-        // This is a permanent scar that prevents posts from completely recovering
-        if (servedCount >= 3) {
-            const permanentScar = -Math.round(500 * Math.pow(servedCount - 2, 2.0)) // Heavier scar
-            score += permanentScar
-            signals['permanent_fatigue_scar'] = permanentScar
-            // Only log extreme permanent scars (> 3000)
-            if (Math.abs(permanentScar) > 3000) {
-                console.log(`[Permanent Scar] ${permanentScar} permanent penalty for post served ${servedCount} times: ${post.uri.slice(-10)}`)
-            }
-        }
+        // Permanent scar system removed - replaced with -50% multiplier per view above
 
         // Deterministic jitter for variety - seed it with User DID to ensure unique order per user
         const salt = post.uri + requesterDid
@@ -1032,20 +1001,21 @@ export const handler = async (
             return false // Never show liked posts again
         }
 
-        // HARD FILTER: Completely remove posts with 0 engagement that have been served 3+ times
-        const servedCount = servedCountMap[sp.post.uri] || 0
+        // HARD FILTER: Completely remove posts with 0 engagement that have been seen 3+ times
+        const seenCount = seenCountMap[sp.post.uri] || 0
         const hasZeroEngagement = (sp.post.likeCount || 0) === 0 && (sp.post.repostCount || 0) === 0
-        if (hasZeroEngagement && servedCount >= 3) {
+        if (hasZeroEngagement && seenCount >= 3) {
             // Only log extreme zero engagement removals (> 15 serves)
-            if (servedCount >= 15) {
-                console.log(`[Zero Engagement Filter] Removing post served ${servedCount} times with 0 engagement: ${sp.post.uri.slice(-10)}`)
+            if (seenCount >= 15) {
+                console.log(`[Zero Engagement Filter] Removing post seen ${seenCount} times with 0 engagement: ${sp.post.uri.slice(-10)}`)
             }
             return false // Never show zero-engagement posts after 3 views
         }
 
         // Always allow original posts through standard criteria
+        // Relaxed from -100 to -5000: We want the diversity/dedup logic to handle truncation, not a hard score floor.
         if (!sp.post.replyParent) {
-            return sp.score > -100
+            return sp.score > -5000
         }
 
         // Advanced reply filtering
@@ -1086,11 +1056,11 @@ export const handler = async (
 
         // Rule 4: Standard reply filtering for other cases
         if (isLayer1 || isLayer2 || isInteracted) {
-            return sp.score > -50
+            return sp.score > -2000
         }
 
         // Rule 5: Default case - require higher score for unknown replies
-        return sp.score > 200
+        return sp.score > -1000
     })
 
     // Advanced Thread Deduplication with Reply Intelligence
@@ -1148,6 +1118,30 @@ export const handler = async (
         return a.post.uri.localeCompare(b.post.uri)
     })
 
+    // --- BATCH MODE: Return the full scored pool with post data for embedding ---
+    if (batchMode) {
+        console.log(`[Batch Mode] Returning ${finalPool.length} scored candidates (no fatigue/diversity applied)`)
+        return {
+            feed: finalPool.map((p) => ({ post: p.post.uri })),
+            cursor: undefined,
+            // Attach full post data + scores for the batch pipeline to use
+            _batchData: finalPool.map((p) => ({
+                uri: p.post.uri,
+                text: p.post.text,
+                author: p.post.author,
+                indexedAt: p.post.indexedAt,
+                likeCount: p.post.likeCount,
+                repostCount: p.post.repostCount,
+                hasImage: p.post.hasImage,
+                hasVideo: p.post.hasVideo,
+                score: p.score,
+                signals: p.signals,
+            })),
+        }
+    }
+
+    // --- SERVE MODE: Normal feed serving with diversity and pagination ---
+
     // Apply account diversity: prevent same author from appearing consecutively
     const diversifiedPool = applyAccountDiversity(finalPool)
 
@@ -1203,7 +1197,7 @@ export const handler = async (
     // Log final feed composition for monitoring
     const replyCount = page.filter(p => p.post.replyParent).length
     const originalCount = page.filter(p => !p.post.replyParent).length
-    const previouslySeenCount = page.filter(p => servedCountMap[p.post.uri] > 0).length
+    const previouslySeenCount = page.filter(p => seenCountMap[p.post.uri] > 0).length
     const filteredOutCount = scoredPosts.length - filtered.length
     console.log(`[Feed Composition] Final feed: ${page.length} items (${originalCount} original, ${replyCount} replies, ${previouslySeenCount} previously seen)`)
     console.log(`[Filtering] Removed ${filteredOutCount} posts (${userInteractions.filter(ui => ui.type === 'like').length} liked posts filtered out, ${previouslySeenCount} seen posts penalized)`)
@@ -1263,7 +1257,7 @@ export async function updateAuthorFatigueOnServe(
         }
 
         // Cap scores
-        newFatigueScore = Math.min(100, Math.max(0, newFatigueScore))
+        newFatigueScore = Math.min(100, Math.max(-100, newFatigueScore))
         newAffinityScore = Math.min(10, Math.max(0.1, newAffinityScore))
 
         await ctx.db
@@ -1379,7 +1373,7 @@ export async function updateAuthorFatigueOnInteraction(
             }
 
             // Cap scores
-            newFatigueScore = Math.min(100, Math.max(0, newFatigueScore))
+            newFatigueScore = Math.min(100, Math.max(-100, newFatigueScore))
             newAffinityScore = Math.min(10, Math.max(0.1, newAffinityScore))
 
             await ctx.db
@@ -1524,9 +1518,11 @@ export async function handleInteractionFeedback(
         const adjustment = type === 'more' ? keywordAdj : -keywordAdj
         console.log(`[Feedback] Adjusting ${words.length} keywords by ${adjustment}`)
 
+        const restrictedKeywords = new Set(['adult', 'porn', 'nsfw', 'pornography', 'xxx', 'hentai', 'furry'])
+
         for (const word of words) {
             const cleanWord = word.replace(/[^\w]/g, '')
-            if (cleanWord.length < 4) continue
+            if (cleanWord.length < 4 || restrictedKeywords.has(cleanWord)) continue
 
             const existing = await ctx.db
                 .selectFrom('user_keyword')

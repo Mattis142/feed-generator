@@ -5,6 +5,7 @@ export type AppContext = {
   db: Database
   didResolver: DidResolver
   cfg: Config
+  triggerBatchPipeline?: (priority?: boolean) => void
 }
 
 export type Config = {

@@ -96,6 +96,9 @@ out
 .nuxt
 dist
 
+# MobileCLIP2-S2 model
+models/
+
 # Gatsby files
 .cache/
 # Comment in the public line in if your project uses Gatsby and not Next.js
@@ -156,3 +159,5 @@ meta.json
 density_grid.bin
 cluster_labels.json
 points.bin
+db.sqlite-wal
+db.sqlite-shm

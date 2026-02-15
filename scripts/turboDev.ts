@@ -133,7 +133,12 @@ const run = async () => {
         }, TUNNEL_TIMEOUT_MS)
     }
 
+    let healthCheckActive = false
+
     const startHealthCheck = () => {
+        if (healthCheckActive) return
+        healthCheckActive = true
+        
         const checkTunnel = () => {
             if (!tunnelProcess || !currentHostname) return
 

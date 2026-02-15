@@ -61,6 +61,22 @@ export default function (server: Server, ctx: AppContext) {
         interaction.event === 'app.bsky.feed.defs#requestMore'
       )
 
+      // Log clickthrough and share interactions (without processing)
+      const clickthroughAndShareInteractions = interactions.filter((interaction: any) =>
+        interaction.event === 'app.bsky.feed.defs#interactionShare' ||
+        interaction.event === 'app.bsky.feed.defs#clickthroughItem' ||
+        interaction.event === 'app.bsky.feed.defs#clickthroughAuthor' ||
+        interaction.event === 'app.bsky.feed.defs#clickthroughReposter' ||
+        interaction.event === 'app.bsky.feed.defs#clickthroughEmbed'
+      )
+
+      if (clickthroughAndShareInteractions.length > 0) {
+        console.log(`[Clickthrough/Share] Received ${clickthroughAndShareInteractions.length} interactions:`)
+        clickthroughAndShareInteractions.forEach((interaction: any, index: number) => {
+          console.log(`  ${index + 1}. Event: ${interaction.event}, Item: ${interaction.item}`)
+        })
+      }
+
       if (feedbackInteractions.length > 0) {
         const { handleInteractionFeedback } = await import('../algos/social-graph')
         for (const interaction of feedbackInteractions) {
