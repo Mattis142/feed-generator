@@ -2,6 +2,7 @@ import { Database } from './db'
 import WebSocket from 'ws'
 import { updateTasteSimilarity } from './algos/taste-similarity'
 import { updateAuthorFatigueOnInteraction } from './algos/social-graph'
+import { logger } from './logger'
 
 export type JetstreamConfig = {
   wantedCollections: string[]
@@ -101,12 +102,13 @@ export class JetstreamSubscription {
         }
       })
       console.log(`[Batch Flush] Posts: ${postsToFlush.length}, Deletes: ${deletesToFlush.size}, Likes: ${likesToFlush.size}, Reposts: ${repostsToFlush.size}, Interactions: ${interactionsToFlush.length}`)
+      logger.info(`Batch Flush completed. Posts: ${postsToFlush.length}, Deletes: ${deletesToFlush.size}, Likes: ${likesToFlush.size}`)
 
       if (this.cursor) {
         await this.updateCursor(this.cursor)
       }
     } catch (err) {
-      console.error('[Batch Flush] Failed to flush to DB:', err)
+      logger.error('Failed to flush to DB:', err)
       // Retry logic (simplified)
       for (const p of postsToFlush) this.pendingPosts.push(p)
       for (const d of deletesToFlush) this.pendingPostDeletes.add(d)
@@ -142,12 +144,12 @@ export class JetstreamSubscription {
       }
 
       const urlStr = urlObj.toString()
-      console.log(`Connecting to Jetstream at: ${urlStr}`)
+      logger.info(`Connecting to Jetstream at: ${urlStr}`)
 
       this.sub = new WebSocket(urlStr)
 
       this.sub.on('open', () => {
-        console.log(`Jetstream connected (${this.config.wantedCollections.join(', ')}). Sending options update...`)
+        logger.info(`Jetstream connected (${this.config.wantedCollections.join(', ')}). Sending options update...`)
         this.sendOptionsUpdate()
       })
 
@@ -156,20 +158,20 @@ export class JetstreamSubscription {
           const event = JSON.parse(data.toString())
           await this.handleEvent(event)
         } catch (err) {
-          console.error('Error handling Jetstream event', err)
+          logger.error('Error handling Jetstream event', err)
         }
       })
 
       this.sub.on('error', (err) => {
-        console.error('Jetstream WebSocket error:', err)
+        logger.error('Jetstream WebSocket error:', err)
       })
 
       this.sub.on('close', () => {
-        console.log('Jetstream connection closed. Reconnecting...')
+        logger.warn('Jetstream connection closed. Reconnecting...')
         setTimeout(() => this.run(subscriptionReconnectDelay), subscriptionReconnectDelay)
       })
     } catch (err) {
-      console.error('Error starting Jetstream subscription', err)
+      logger.error('Error starting Jetstream subscription', err)
       setTimeout(() => this.run(subscriptionReconnectDelay), subscriptionReconnectDelay)
     }
   }

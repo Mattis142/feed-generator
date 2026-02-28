@@ -2,6 +2,7 @@ import dotenv from 'dotenv'
 import { createDb } from './db'
 import { JetstreamSubscription } from './subscription'
 import { migrateToLatest } from './db'
+import { logger } from './logger'
 
 const run = async () => {
     dotenv.config()
@@ -13,6 +14,7 @@ const run = async () => {
     const subscriptionReconnectDelay = parseInt(process.env.FEEDGEN_SUBSCRIPTION_RECONNECT_DELAY || '3000', 10)
 
     console.log('🤖 Starting Feed Generator Ingester...')
+    logger.info('Starting Feed Generator Ingester...')
 
     const db = createDb(postgresConnectionString)
     await migrateToLatest(db)
@@ -53,7 +55,7 @@ const run = async () => {
             subscription.trackedInteractionDids = didsToTrack
             console.log(`[Ingester] Updated tracked interaction DIDs. Watching ${didsToTrack.size} DIDs for graph interactions.`)
         } catch (err) {
-            console.error('[Ingester] Failed to refresh tracked DIDs:', err)
+            logger.error('Failed to refresh tracked DIDs:', err)
         }
     }
 
@@ -66,12 +68,12 @@ const run = async () => {
     setTimeout(() => cleanupDatabase(db), 5000)
     setTimeout(() => refreshTrackedDids(), 5000)
 
-    console.log('✅ Ingester running and subscribed to global firehose.')
+    logger.info('Ingester running and subscribed to global firehose.')
 }
 
 async function cleanupDatabase(db: any) {
     try {
-        console.log('🧹 Running background Postgres cleanup...')
+        logger.info('Running background Postgres cleanup...')
 
         // Prune very old feed_debug_logs
         await db.deleteFrom('feed_debug_log')
@@ -101,9 +103,9 @@ async function cleanupDatabase(db: any) {
             //.where('author', 'not in', (eb) => eb.selectFrom('graph_follow').select('followee')) 
             .executeTakeFirst()
 
-        console.log(`🧹 Cleanup complete. Cleaned empty global posts: ${deletedPosts.numDeletedRows}`)
+        logger.info(`Cleanup complete. Cleaned empty global posts: ${deletedPosts.numDeletedRows}`)
     } catch (err) {
-        console.error('❌ Failed during Postgres background cleanup:', err)
+        logger.error('Failed during Postgres background cleanup:', err)
     }
 }
 

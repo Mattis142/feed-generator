@@ -15,6 +15,7 @@ import wellKnown from './well-known'
 import { GraphBuilder } from './services/graph-builder'
 import { cleanupOldTasteData } from './algos/taste-similarity'
 import { qdrantDB } from './db/qdrant'
+import { logger } from './logger'
 
 export class FeedGenerator {
   public app: express.Application
@@ -79,7 +80,7 @@ export class FeedGenerator {
     try {
       await qdrantDB.ensureFeedCollections()
     } catch (err) {
-      console.error('Failed to initialize Qdrant feed collections (non-fatal):', err)
+      logger.error('Failed to initialize Qdrant feed collections (non-fatal):', err)
     }
 
     this.server = this.app.listen(this.cfg.port, this.cfg.listenhost)
@@ -87,31 +88,31 @@ export class FeedGenerator {
 
     // Start background refresh for wantedDids (For API context)
     this.refreshWantedDids().catch(err => {
-      console.error('Initial refreshWantedDids failed', err)
+      logger.error('Initial refreshWantedDids failed', err)
     })
     setInterval(() => {
       this.refreshWantedDids().catch(err => {
-        console.error('Periodic refreshWantedDids failed', err)
+        logger.error('Periodic refreshWantedDids failed', err)
       })
     }, 30 * 60 * 1000)
 
     // Start daily keywords extraction job
     this.runDailyKeywords().catch(err => {
-      console.error('Initial runDailyKeywords failed', err)
+      logger.error('Initial runDailyKeywords failed', err)
     })
     setInterval(() => {
       this.runDailyKeywords().catch(err => {
-        console.error('Periodic runDailyKeywords failed', err)
+        logger.error('Periodic runDailyKeywords failed', err)
       })
     }, 24 * 60 * 60 * 1000) // Every 24 hours
 
     // Start background cleanup for taste similarity data
     this.cleanupTasteData().catch(err => {
-      console.error('Initial cleanupTasteData failed', err)
+      logger.error('Initial cleanupTasteData failed', err)
     })
     setInterval(() => {
       this.cleanupTasteData().catch(err => {
-        console.error('Periodic cleanupTasteData failed', err)
+        logger.error('Periodic cleanupTasteData failed', err)
       })
     }, 7 * 24 * 60 * 60 * 1000) // Every 7 days
 
@@ -119,19 +120,19 @@ export class FeedGenerator {
     // Delay initial run by 2 minutes to let the server stabilize
     setTimeout(() => {
       this.runBatchPipeline().catch(err => {
-        console.error('Initial runBatchPipeline failed', err)
+        logger.error('Initial runBatchPipeline failed', err)
       })
     }, 2 * 60 * 1000)
     setInterval(() => {
       this.runBatchPipeline().catch(err => {
-        console.error('Periodic runBatchPipeline failed', err)
+        logger.error('Periodic runBatchPipeline failed', err)
       })
     }, 90 * 60 * 1000) // Every 90 minutes
 
     // Cleanup expired semantic batches (every 30 minutes)
     setInterval(() => {
       this.cleanupExpiredBatches().catch(err => {
-        console.error('Periodic cleanupExpiredBatches failed', err)
+        logger.error('Periodic cleanupExpiredBatches failed', err)
       })
     }, 30 * 60 * 1000) // Every 30 minutes
 
@@ -141,7 +142,7 @@ export class FeedGenerator {
     })
     setInterval(() => {
       this.cleanupDebugLogs().catch(err => {
-        console.error('Periodic cleanupDebugLogs failed', err)
+        logger.error('Periodic cleanupDebugLogs failed', err)
       })
     }, 5 * 60 * 1000) // Every 5 minutes
 
@@ -150,7 +151,7 @@ export class FeedGenerator {
 
   private async refreshWantedDids() {
     try {
-      console.log('Refreshing user graphs...')
+      logger.info('Refreshing user graphs...')
       const graphBuilder = new GraphBuilder(this.db)
 
       // Build graphs for all whitelisted users
@@ -167,7 +168,7 @@ export class FeedGenerator {
 
   private async runDailyKeywords() {
     try {
-      console.log('Running daily keywords extraction job...')
+      logger.info('Running daily keywords extraction job...')
       // Run the daily keywords script as a child process to avoid blocking the main server
       const scriptPath = path.join(__dirname, '../scripts/daily-keywords.ts')
       const child = spawn('ts-node', [scriptPath], {
@@ -176,7 +177,7 @@ export class FeedGenerator {
       })
 
       child.on('error', (err: Error) => {
-        console.error('Failed to spawn daily keywords process:', err)
+        logger.error('Failed to spawn daily keywords process:', err)
       })
 
       child.on('exit', (code: number) => {
@@ -193,9 +194,9 @@ export class FeedGenerator {
 
   private async cleanupTasteData() {
     try {
-      console.log('Running background cleanup for taste similarity data...')
+      logger.info('Running background cleanup for taste similarity data...')
       await cleanupOldTasteData({ db: this.db }, 90) // Keep 90 days of data
-      console.log('Taste similarity data cleanup completed')
+      logger.info('Taste similarity data cleanup completed')
     } catch (err) {
       console.error('Failed to cleanup taste data', err)
     }
@@ -217,7 +218,7 @@ export class FeedGenerator {
     try {
       this.isPipelineRunning = true
       this.lastPipelineRunAt = now
-      console.log('Running semantic batch pipeline...')
+      logger.info('Running semantic batch pipeline...')
       const scriptPath = path.join(__dirname, '../scripts/batch-pipeline.ts')
       const child = spawn('ts-node', [scriptPath], {
         stdio: 'inherit',
@@ -226,7 +227,7 @@ export class FeedGenerator {
 
       child.on('error', (err: Error) => {
         this.isPipelineRunning = false
-        console.error('Failed to spawn batch pipeline process:', err)
+        logger.error('Failed to spawn batch pipeline process:', err)
       })
 
       child.on('exit', (code: number) => {
