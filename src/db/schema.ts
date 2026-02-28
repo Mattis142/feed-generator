@@ -26,9 +26,9 @@ export type Post = {
   replyRoot: string | null
   replyParent: string | null
   text: string | null
-  hasImage: number
-  hasVideo: number
-  hasExternal: number
+  hasImage: boolean
+  hasVideo: boolean
+  hasExternal: boolean
 }
 
 export type SubState = {

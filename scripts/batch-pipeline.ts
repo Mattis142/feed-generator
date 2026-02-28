@@ -31,8 +31,8 @@ const execAsync = promisify(exec)
 async function run() {
     dotenv.config()
 
-    const sqliteLocation = process.env.FEEDGEN_SQLITE_LOCATION ?? ':memory:'
-    const db = createDb(sqliteLocation)
+    const postgresConnectionString = process.env.POSTGRES_CONNECTION_STRING ?? 'postgresql://bsky:bskypassword@localhost:5432/repo'
+    const db = createDb(postgresConnectionString)
     await migrateToLatest(db)
 
     // Initialize Qdrant collections
@@ -71,7 +71,7 @@ async function run() {
             port: 0, // Not serving
             listenhost: '',
             hostname,
-            sqliteLocation,
+            postgresConnectionString,
             subscriptionEndpoint: '',
             subscriptionReconnectDelay: 3000,
             serviceDid,
@@ -159,15 +159,15 @@ async function run() {
                 // Separate posts by image content
                 const postsWithImages = postsToEmbed.filter((p: any) => p.hasImage === 1)
                 const postsWithoutImages = postsToEmbed.filter((p: any) => p.hasImage !== 1)
-                
+
                 // Check for posts without text (rare fallback case)
                 const postsNeedingTextCheck = postsWithoutImages.filter((p: any) => !p.text || p.text.trim().length === 0)
                 const postsWithValidText = postsWithoutImages.filter((p: any) => p.text && p.text.trim().length > 0)
-                
+
                 console.log(`[Batch Pipeline] Posts analysis: ${postsWithImages.length} with images, ${postsWithValidText.length} with text only, ${postsNeedingTextCheck.length} need text fetch`)
 
                 const richPosts: any[] = []
-                
+
                 // Add posts with valid text and no images immediately (no AppView needed)
                 for (const post of postsWithValidText) {
                     richPosts.push({
@@ -180,14 +180,14 @@ async function run() {
 
                 // Only fetch posts with images or missing text from AppView
                 const postsToFetch = [...postsWithImages, ...postsNeedingTextCheck]
-                
+
                 if (postsToFetch.length > 0) {
                     console.log(`[Batch Pipeline] Fetching ${postsToFetch.length} posts from AppView (image metadata + text fallback)...`)
                     const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
 
                     // Fetch in batches of 25 (AppView limit)
                     const urisToFetch = postsToFetch.map((p: any) => p.uri)
-                for (let i = 0; i < urisToFetch.length; i += 25) {
+                    for (let i = 0; i < urisToFetch.length; i += 25) {
                         const batchUris = urisToFetch.slice(i, i + 25)
                         try {
                             const res = await publicAgent.getPosts({ uris: batchUris })
@@ -213,7 +213,7 @@ async function run() {
 
                                     // Find the original post data to get DB text
                                     const originalPost = postsToFetch.find(p => p.uri === postView.uri)
-                                    
+
                                     richPosts.push({
                                         uri: postView.uri,
                                         text: originalPost?.text || record.text || '',  // Prefer DB text, fallback to AppView

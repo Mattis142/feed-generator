@@ -16,10 +16,105 @@ export class JetstreamSubscription {
   public cursor: number | undefined
   public config: JetstreamConfig
 
+  public trackedInteractionDids = new Set<string>()
+
+  // Batching state
+  private pendingLikes = new Map<string, number>()
+  private pendingReposts = new Map<string, number>()
+  private pendingPosts: any[] = []
+  private pendingPostDeletes = new Set<string>()
+  private pendingReplyCounts = new Map<string, number>()
+  private pendingGraphInteractions: any[] = []
+  private batchInterval: NodeJS.Timeout | null = null
+
   constructor(db: Database, service: string, config: JetstreamConfig) {
     this.db = db
     this.service = service
     this.config = config
+    this.batchInterval = setInterval(() => this.flushBatch(), 5000)
+  }
+
+  private async flushBatch() {
+    if (this.pendingLikes.size === 0 && this.pendingReposts.size === 0 && this.pendingPosts.length === 0 && this.pendingPostDeletes.size === 0 && this.pendingReplyCounts.size === 0 && this.pendingGraphInteractions.length === 0) return
+
+    const likesToFlush = new Map(this.pendingLikes)
+    const repostsToFlush = new Map(this.pendingReposts)
+    const replyCountsToFlush = new Map(this.pendingReplyCounts)
+    const postsToFlush = [...this.pendingPosts]
+    const deletesToFlush = new Set(this.pendingPostDeletes)
+    const interactionsToFlush = [...this.pendingGraphInteractions]
+
+    this.pendingLikes.clear()
+    this.pendingReposts.clear()
+    this.pendingReplyCounts.clear()
+    this.pendingPosts = []
+    this.pendingPostDeletes.clear()
+    this.pendingGraphInteractions = []
+
+    try {
+      await this.db.transaction().execute(async (trx) => {
+        // Insert posts
+        if (postsToFlush.length > 0) {
+          for (let i = 0; i < postsToFlush.length; i += 500) {
+            await trx.insertInto('post')
+              .values(postsToFlush.slice(i, i + 500))
+              .onConflict((oc) => oc.doNothing())
+              .execute()
+          }
+        }
+
+        // Delete posts
+        if (deletesToFlush.size > 0) {
+          const deleteArray = Array.from(deletesToFlush)
+          for (let i = 0; i < deleteArray.length; i += 500) {
+            await trx.deleteFrom('post').where('uri', 'in', deleteArray.slice(i, i + 500)).execute()
+          }
+        }
+
+        for (const [uri, count] of likesToFlush.entries()) {
+          await trx.updateTable('post')
+            .set((eb) => ({ likeCount: eb('likeCount', '+', count) }))
+            .where('uri', '=', uri)
+            .execute()
+        }
+        for (const [uri, count] of repostsToFlush.entries()) {
+          await trx.updateTable('post')
+            .set((eb) => ({ repostCount: eb('repostCount', '+', count) }))
+            .where('uri', '=', uri)
+            .execute()
+        }
+        for (const [uri, count] of replyCountsToFlush.entries()) {
+          await trx.updateTable('post')
+            .set((eb) => ({ replyCount: eb('replyCount', '+', count) }))
+            .where('uri', '=', uri)
+            .execute()
+        }
+
+        // Insert interactions
+        if (interactionsToFlush.length > 0) {
+          for (let i = 0; i < interactionsToFlush.length; i += 500) {
+            await trx.insertInto('graph_interaction')
+              .values(interactionsToFlush.slice(i, i + 500))
+              .onConflict((oc) => oc.doNothing())
+              .execute()
+          }
+        }
+      })
+      console.log(`[Batch Flush] Posts: ${postsToFlush.length}, Deletes: ${deletesToFlush.size}, Likes: ${likesToFlush.size}, Reposts: ${repostsToFlush.size}, Interactions: ${interactionsToFlush.length}`)
+
+      if (this.cursor) {
+        await this.updateCursor(this.cursor)
+      }
+    } catch (err) {
+      console.error('[Batch Flush] Failed to flush to DB:', err)
+      // Retry logic (simplified)
+      for (const p of postsToFlush) this.pendingPosts.push(p)
+      for (const d of deletesToFlush) this.pendingPostDeletes.add(d)
+      for (const i of interactionsToFlush) this.pendingGraphInteractions.push(i)
+      for (const [uri, count] of likesToFlush.entries()) this.pendingLikes.set(uri, (this.pendingLikes.get(uri) || 0) + count)
+      for (const [uri, count] of repostsToFlush.entries()) this.pendingReposts.set(uri, (this.pendingReposts.get(uri) || 0) + count)
+      for (const [uri, count] of replyCountsToFlush.entries()) this.pendingReplyCounts.set(uri, (this.pendingReplyCounts.get(uri) || 0) + count)
+    }
   }
 
   async run(subscriptionReconnectDelay: number) {
@@ -89,7 +184,8 @@ export class JetstreamSubscription {
       if (operation === 'create') {
         const replyRoot = record.reply?.root?.uri || null
         const replyParent = record.reply?.parent?.uri || null
-        const text = record.text || null
+        // PostgreSQL strictly rejects \u0000 (null bytes) in strings, which Bluesky permits
+        const text = record.text?.replace(/\u0000/g, '') || null
 
         // Extract media flags
         const embed = record.embed
@@ -97,59 +193,44 @@ export class JetstreamSubscription {
         const hasVideo = embed?.$type === 'app.bsky.embed.video' || (embed?.$type === 'app.bsky.embed.recordWithMedia' && embed?.media?.$type === 'app.bsky.embed.video')
         const hasExternal = embed?.$type === 'app.bsky.embed.external'
 
-        await this.db
-          .insertInto('post')
-          .values({
-            uri,
-            cid,
-            author: did,
-            indexedAt: new Date().toISOString(),
-            likeCount: 0,
-            replyCount: 0,
-            repostCount: 0,
-            replyRoot,
-            replyParent,
-            text,
-            hasImage: hasImage ? 1 : 0,
-            hasVideo: hasVideo ? 1 : 0,
-            hasExternal: hasExternal ? 1 : 0,
-          })
-          .onConflict((oc) => oc.doNothing())
-          .execute()
+        this.pendingPosts.push({
+          uri,
+          cid,
+          author: did,
+          indexedAt: new Date().toISOString(),
+          likeCount: 0,
+          replyCount: 0,
+          repostCount: 0,
+          replyRoot,
+          replyParent,
+          text,
+          hasImage,
+          hasVideo,
+          hasExternal,
+        })
 
         if (replyParent) {
-          await this.db
-            .updateTable('post')
-            .set((eb) => ({
-              replyCount: eb('replyCount', '+', 1),
-            }))
-            .where('uri', '=', replyParent)
-            .execute()
+          this.pendingReplyCounts.set(replyParent, (this.pendingReplyCounts.get(replyParent) || 0) + 1)
         }
       } else if (operation === 'delete') {
-        await this.db.deleteFrom('post').where('uri', '=', uri).execute()
+        this.pendingPostDeletes.add(uri)
       }
     } else if (collection === 'app.bsky.feed.like') {
       if (operation === 'create') {
         const subjectUri = record.subject?.uri
         if (subjectUri) {
-          await this.db
-            .updateTable('post')
-            .set((eb) => ({
-              likeCount: eb('likeCount', '+', 1),
-            }))
-            .where('uri', '=', subjectUri)
-            .execute()
+          // Batch it into memory instead of hitting the DB instantly
+          this.pendingLikes.set(subjectUri, (this.pendingLikes.get(subjectUri) || 0) + 1)
 
-          await this.db.insertInto('graph_interaction').values({
-            actor: did,
-            target: subjectUri,
-            type: 'like',
-            weight: 1,
-            indexedAt: new Date().toISOString(),
-          })
-            .onConflict((oc) => oc.doNothing())
-            .execute()
+          if (this.trackedInteractionDids.has(did)) {
+            this.pendingGraphInteractions.push({
+              actor: did,
+              target: subjectUri,
+              type: 'like',
+              weight: 1,
+              indexedAt: new Date().toISOString(),
+            })
+          }
 
           // Update taste similarity for all users
           try {
@@ -178,23 +259,18 @@ export class JetstreamSubscription {
       if (operation === 'create') {
         const subjectUri = record.subject?.uri
         if (subjectUri) {
-          await this.db
-            .updateTable('post')
-            .set((eb) => ({
-              repostCount: eb('repostCount', '+', 1),
-            }))
-            .where('uri', '=', subjectUri)
-            .execute()
+          // Batch it into memory
+          this.pendingReposts.set(subjectUri, (this.pendingReposts.get(subjectUri) || 0) + 1)
 
-          await this.db.insertInto('graph_interaction').values({
-            actor: did,
-            target: subjectUri,
-            type: 'repost',
-            weight: 2,
-            indexedAt: new Date().toISOString(),
-          })
-            .onConflict((oc) => oc.doNothing())
-            .execute()
+          if (this.trackedInteractionDids.has(did)) {
+            this.pendingGraphInteractions.push({
+              actor: did,
+              target: subjectUri,
+              type: 'repost',
+              weight: 2,
+              indexedAt: new Date().toISOString(),
+            })
+          }
 
           // Update author fatigue for repost interactions
           try {
@@ -212,15 +288,15 @@ export class JetstreamSubscription {
       // Handle reply interactions (when someone replies to a post)
       const replyParent = record.reply?.parent?.uri
       if (replyParent) {
-        await this.db.insertInto('graph_interaction').values({
-          actor: did,
-          target: replyParent,
-          type: 'reply',
-          weight: 1,
-          indexedAt: new Date().toISOString(),
-        })
-          .onConflict((oc) => oc.doNothing())
-          .execute()
+        if (this.trackedInteractionDids.has(did)) {
+          this.pendingGraphInteractions.push({
+            actor: did,
+            target: replyParent,
+            type: 'reply',
+            weight: 1,
+            indexedAt: new Date().toISOString(),
+          })
+        }
 
         // Update author fatigue for reply interactions
         try {
@@ -236,7 +312,7 @@ export class JetstreamSubscription {
     }
 
     if (evt.time_us) {
-      await this.updateCursor(evt.time_us)
+      this.cursor = evt.time_us
     }
   }
 
@@ -267,6 +343,10 @@ export class JetstreamSubscription {
   }
 
   async stop() {
+    if (this.batchInterval) {
+      clearInterval(this.batchInterval)
+      await this.flushBatch()
+    }
     if (this.sub) {
       // Remove listeners to prevent 'error' or 'close' from firing during planned termination
       this.sub.removeAllListeners()

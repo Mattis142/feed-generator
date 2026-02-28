@@ -19,7 +19,7 @@ migrations['001'] = {
     await db.schema
       .createTable('sub_state')
       .addColumn('service', 'varchar', (col) => col.primaryKey())
-      .addColumn('cursor', 'integer', (col) => col.notNull())
+      .addColumn('cursor', 'bigint', (col) => col.notNull())
       .execute()
   },
   async down(db: Kysely<any>) {
@@ -63,7 +63,7 @@ migrations['002'] = {
       .execute()
     await db.schema
       .createTable('graph_interaction')
-      .addColumn('id', 'integer', (col) => col.primaryKey().autoIncrement())
+      .addColumn('id', 'serial', (col) => col.primaryKey())
       .addColumn('actor', 'varchar', (col) => col.notNull())
       .addColumn('target', 'varchar', (col) => col.notNull())
       .addColumn('type', 'varchar', (col) => col.notNull())
@@ -176,8 +176,8 @@ migrations['006'] = {
   async up(db: Kysely<any>) {
     // 1. Deduplicate graph_interaction before applying unique constraint
     await sql`DELETE FROM graph_interaction 
-          WHERE rowid NOT IN (
-            SELECT MAX(rowid) 
+          WHERE id NOT IN (
+            SELECT MAX(id) 
             FROM graph_interaction 
             GROUP BY actor, target, type
           )`.execute(db)
@@ -415,15 +415,15 @@ migrations['015'] = {
   async up(db: Kysely<any>) {
     await db.schema
       .alterTable('post')
-      .addColumn('hasImage', 'boolean', (col) => col.defaultTo(0))
+      .addColumn('hasImage', 'boolean', (col) => col.defaultTo(false))
       .execute()
     await db.schema
       .alterTable('post')
-      .addColumn('hasVideo', 'boolean', (col) => col.defaultTo(0))
+      .addColumn('hasVideo', 'boolean', (col) => col.defaultTo(false))
       .execute()
     await db.schema
       .alterTable('post')
-      .addColumn('hasExternal', 'boolean', (col) => col.defaultTo(0))
+      .addColumn('hasExternal', 'boolean', (col) => col.defaultTo(false))
       .execute()
   },
   async down(db: Kysely<any>) {
@@ -501,5 +501,19 @@ migrations['017'] = {
   },
   async down(db: Kysely<any>) {
     await db.schema.dropTable('user_candidate_batch').execute()
+  },
+}
+migrations['018'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .alterTable('taste_reputation')
+      .alterColumn('agreementHistory', (col) => col.setDataType('double precision'))
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema
+      .alterTable('taste_reputation')
+      .alterColumn('agreementHistory', (col) => col.setDataType('integer'))
+      .execute()
   },
 }

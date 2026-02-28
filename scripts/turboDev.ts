@@ -22,9 +22,8 @@ const run = async () => {
     console.log('🚀 Starting Turbo Dev Mode with Auto-Reconnect...')
 
     // 1. Kill existing processes on port 3000 and any ssh tunnels (only on first run)
-    console.log('🧹 Cleaning up old processes...')
+    console.log('🧹 Cleaning up old tunnel processes...')
     try {
-        execSync("lsof -i :3000 -t | xargs kill -9", { stdio: 'ignore' })
         execSync("ps aux | grep 'ngrok' | grep -v grep | awk '{print $2}' | xargs kill -9", { stdio: 'ignore' })
     } catch (e) {
         // Ignore errors if no processes found
@@ -55,13 +54,13 @@ const run = async () => {
             const oldHostname = currentHostname
             currentHostname = hostname
             tunnelReady = true
-            
+
             if (oldHostname && oldHostname !== hostname) {
                 console.log(`\n🔄 Hostname changed: ${oldHostname} → ${hostname}`)
             } else {
                 console.log(`\n✅ Tunnel active: ${hostname}`)
             }
-            
+
             updateEnv(hostname)
             publishFeed().then(() => {
                 if (!serverStarted) {
@@ -97,7 +96,7 @@ const run = async () => {
                     console.error(`Tunnel Error: ${errorStr}`)
                 }
                 // Check for connection errors that might require immediate reconnection
-                if (errorStr.includes('connection reset') || 
+                if (errorStr.includes('connection reset') ||
                     errorStr.includes('Broken pipe') ||
                     errorStr.includes('Connection refused') ||
                     errorStr.includes('Network is unreachable') ||
@@ -138,7 +137,7 @@ const run = async () => {
     const startHealthCheck = () => {
         if (healthCheckActive) return
         healthCheckActive = true
-        
+
         const checkTunnel = () => {
             if (!tunnelProcess || !currentHostname) return
 
@@ -249,17 +248,13 @@ const publishFeed = async () => {
 }
 
 const startServer = () => {
-    if (serverProcess) {
-        serverProcess.kill()
-    }
-    console.log('🛰️ Starting Feed Generator server...')
-    serverProcess = spawn('npx', ['ts-node', 'src/index.ts'], {
-        stdio: 'inherit',
-        env: { ...process.env, ...dotenv.parse(fs.readFileSync(ENV_PATH)) }
+    console.log('🛰️ Restarting Docker containers to apply new hostname...')
+    serverProcess = spawn('docker', ['compose', 'restart', 'api', 'ingester'], {
+        stdio: 'inherit'
     })
 
     serverProcess.on('error', (err) => {
-        console.error('Failed to start server:', err)
+        console.error('Failed to restart Docker containers:', err)
     })
 }
 

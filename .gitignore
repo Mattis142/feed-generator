@@ -137,27 +137,29 @@ models/
 .yarn/install-state.gz
 .pnp.*
 
+# postgres
+postgres_storage/
+
 # qdrant
 qdrant_storage/
 
-# intellij
-.idea/
-*.iml
-package-lock.json
-yarn.lock
-db.sqlite
-yarn.lock
-yarn.lock
-db.sqlite-journal
-data.db
+# temp directories
+temp_batch/
+temp_keywords/
+
+# model artifacts
+models/
+
+# database & binary files
+*.db
+*.sqlite*
+*.bin
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!.prettierrc
+!meta.json # Keep meta.json if it is a project config, otherwise ignore it
+!.idea/
+
 .DS_Store
-feed.db
-feedgen.sqlite
-followers.bin
-handles.bin
-meta.json
-density_grid.bin
-cluster_labels.json
-points.bin
-db.sqlite-wal
-db.sqlite-shm

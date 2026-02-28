@@ -20,7 +20,6 @@ export class FeedGenerator {
   public app: express.Application
   public server?: http.Server
   public db: Database
-  public firehoses: JetstreamSubscription[]
   public cfg: Config
   private isPipelineRunning = false
   private lastPipelineRunAt = 0
@@ -28,31 +27,16 @@ export class FeedGenerator {
   constructor(
     app: express.Application,
     db: Database,
-    firehoses: JetstreamSubscription[],
     cfg: Config,
   ) {
     this.app = app
     this.db = db
-    this.firehoses = firehoses
     this.cfg = cfg
   }
 
   static create(cfg: Config) {
     const app = express()
-    const db = createDb(cfg.sqliteLocation)
-
-    // Connection A: Global Posts
-    const globalPosts = new JetstreamSubscription(db, cfg.subscriptionEndpoint, {
-      wantedCollections: ['app.bsky.feed.post'],
-      trackedDids: new Set([cfg.publisherDid, ...cfg.whitelist]),
-    })
-
-    // Connection B: Graph Interactions (Initially empty dids, will be updated)
-    const graphInteractions = new JetstreamSubscription(db, cfg.subscriptionEndpoint, {
-      wantedCollections: ['app.bsky.feed.like', 'app.bsky.feed.repost'],
-      wantedDids: [],
-      trackedDids: new Set([cfg.publisherDid, ...cfg.whitelist]),
-    })
+    const db = createDb(cfg.postgresConnectionString)
 
     const didCache = new MemoryCache()
     const didResolver = new DidResolver({
@@ -83,7 +67,7 @@ export class FeedGenerator {
     app.use(server.xrpc.router)
     app.use(wellKnown(ctx))
 
-    const generator = new FeedGenerator(app, db, [globalPosts, graphInteractions], cfg)
+    const generator = new FeedGenerator(app, db, cfg)
     ctx.triggerBatchPipeline = (priority?: boolean) => generator.runBatchPipeline(priority)
     return generator
   }
@@ -98,15 +82,10 @@ export class FeedGenerator {
       console.error('Failed to initialize Qdrant feed collections (non-fatal):', err)
     }
 
-    // Initial run of firehoses
-    for (const firehose of this.firehoses) {
-      firehose.run(this.cfg.subscriptionReconnectDelay)
-    }
-
     this.server = this.app.listen(this.cfg.port, this.cfg.listenhost)
     await events.once(this.server, 'listening')
 
-    // Start background refresh for wantedDids
+    // Start background refresh for wantedDids (For API context)
     this.refreshWantedDids().catch(err => {
       console.error('Initial refreshWantedDids failed', err)
     })
@@ -114,17 +93,7 @@ export class FeedGenerator {
       this.refreshWantedDids().catch(err => {
         console.error('Periodic refreshWantedDids failed', err)
       })
-    }, 30 * 60 * 1000) // Every 30 minutes (increased from 24h for faster discovery)
-
-    // Start background cleanup for low-relevance posts
-    this.cleanupPosts().catch(err => {
-      console.error('Initial cleanupPosts failed', err)
-    })
-    setInterval(() => {
-      this.cleanupPosts().catch(err => {
-        console.error('Periodic cleanupPosts failed', err)
-      })
-    }, 30 * 60 * 1000) // Every 30 minutes
+    }, 30 * 60 * 1000)
 
     // Start daily keywords extraction job
     this.runDailyKeywords().catch(err => {
@@ -179,90 +148,20 @@ export class FeedGenerator {
     return this.server
   }
 
-  private async cleanupPosts() {
-    try {
-      console.log('Running background cleanup for low-relevance posts...')
-      // Keep at least 7 days of data for better temporal diversity
-      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-
-      // Delete posts older than 7 days that have zero engagement and aren't followed
-      const deleted = await this.db.deleteFrom('post')
-        .where('indexedAt', '<', sevenDaysAgo)
-        .where('likeCount', '=', 0)
-        .where('repostCount', '=', 0)
-        .where('author', 'not in', (eb) => eb.selectFrom('graph_follow').select('followee'))
-        .executeTakeFirst()
-
-      console.log(`Pruned ${deleted.numDeletedRows} low-relevance posts.`)
-
-      // Cleanup served posts older than 6 hours (extended from 24h for better fatigue tracking)
-      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
-      const cleanedServed = await this.db.deleteFrom('user_served_post')
-        .where('servedAt', '<', sixHoursAgo)
-        .executeTakeFirst()
-
-      // Cleanup seen posts older than 7 days (permanent fatigue tracking)
-      const seenSevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-      const cleanedSeen = await this.db.deleteFrom('user_seen_post')
-        .where('seenAt', '<', seenSevenDaysAgo)
-        .executeTakeFirst()
-
-      if (cleanedServed.numDeletedRows > 0) {
-        console.log(`Pruned ${cleanedServed.numDeletedRows} old serving history entries.`)
-      }
-      if (cleanedSeen.numDeletedRows > 0) {
-        console.log(`Pruned ${cleanedSeen.numDeletedRows} old seen history entries.`)
-      }
-    } catch (err) {
-      console.error('Failed to cleanup posts', err)
-    }
-  }
-
   private async refreshWantedDids() {
     try {
-      console.log('Refreshing wantedDids for graph subscription...')
+      console.log('Refreshing user graphs...')
       const graphBuilder = new GraphBuilder(this.db)
 
       // Build graphs for all whitelisted users
       const allUsersToTrack = [this.cfg.publisherDid, ...this.cfg.whitelist]
-      const allDids = new Set<string>()
 
       for (const userDid of allUsersToTrack) {
-        const userDids = await graphBuilder.getWantedDids(userDid)
-        userDids.forEach(did => allDids.add(did))
-      }
-
-      // Update the second firehose (Connection B)
-      const graphFirehose = this.firehoses[1]
-      if (graphFirehose) {
-        // Track Layer 1 follows for ALL users
-        const allLayer1Dids = await this.db.selectFrom('graph_follow')
-          .select('followee')
-          .where('follower', 'in', allUsersToTrack)
-          .execute()
-
-        // Track high-reputation Taste Twins for ALL users to index their behaviors
-        const allTasteTwins = await this.db.selectFrom('taste_reputation')
-          .select('similarUserDid')
-          .where('userDid', 'in', allUsersToTrack)
-          .where('reputationScore', '>', 1.1) // Track anyone with positive reputation
-          .execute()
-
-        const didsToTrack = new Set(allLayer1Dids.map(r => r.followee))
-        allTasteTwins.forEach(r => didsToTrack.add(r.similarUserDid))
-        allUsersToTrack.forEach(did => didsToTrack.add(did)) // Track all users themselves
-
-        console.log(`Updating graph options for ${this.firehoses.length} firehoses (${didsToTrack.size} tracked DIDs total)...`)
-        for (const firehose of this.firehoses) {
-          await firehose.updateOptions({
-            // Only update wantedDids for the graph interaction firehose (usually the second one)
-            ...(firehose === graphFirehose ? { wantedDids: Array.from(didsToTrack) } : {}),
-            trackedDids: new Set(allUsersToTrack),
-          })
-        }
+        // Just trigger the graph resolution, which writes to DB
+        await graphBuilder.getWantedDids(userDid)
       }
     } catch (err) {
-      console.error('Failed to refresh wantedDids', err)
+      console.error('Failed to refresh user graphs', err)
     }
   }
 
@@ -407,7 +306,7 @@ export class FeedGenerator {
     //     .deleteFrom('feed_debug_log')
     //     .where('servedAt', '<', debugRetentionLimit)
     //     .executeTakeFirst()
-      
+
     //   if (deleted.numDeletedRows > 0) {
     //     console.log(`[Debug Cleanup] Removed ${deleted.numDeletedRows} old debug log entries`)
     //   }

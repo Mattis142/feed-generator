@@ -12,8 +12,8 @@ const execAsync = promisify(exec)
 const run = async () => {
   dotenv.config()
 
-  const sqliteLocation = process.env.FEEDGEN_SQLITE_LOCATION ?? ':memory:'
-  const db = createDb(sqliteLocation)
+  const postgresConnectionString = process.env.POSTGRES_CONNECTION_STRING ?? 'postgresql://bsky:bskypassword@postgres:5432/repo'
+  const db = createDb(postgresConnectionString)
   await migrateToLatest(db)
 
   // Get active users (users who have been served posts in the last 7 days)
@@ -238,7 +238,7 @@ const run = async () => {
       for (const { keyword, score } of keywordScores) {
         seenKeywords.add(keyword)
         const existingScore = existingMap.get(keyword)
-        
+
         let decayFactor
         if (existingScore !== undefined) {
           // Parabolic decay: extremes decay slower, middle decays faster
@@ -248,7 +248,7 @@ const run = async () => {
           const maxDecay = 0.15 // 15% peak decay at middle
           const minDecay = 0.03 // 3% decay at extremes
           decayFactor = 1 - (minDecay + (maxDecay - minDecay) * parabolicFactor)
-          
+
           const newScore = decayFactor * existingScore + score
           // Update existing keyword
           await db
@@ -279,7 +279,7 @@ const run = async () => {
           const maxDecay = 0.15 // 15% peak decay at middle
           const minDecay = 0.03 // 3% decay at extremes
           const decayFactor = 1 - (minDecay + (maxDecay - minDecay) * parabolicFactor)
-          
+
           const newScore = oldScore * decayFactor
           if (Math.abs(newScore) < 0.1) {
             // Prune: delete keywords below threshold
