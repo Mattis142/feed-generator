@@ -1179,12 +1179,12 @@ export const handler = async (
             servedAt: now,
         }))
 
-        // We use insert into because these are unique per request/serve
-        await ctx.db
-            .insertInto('feed_debug_log')
-            .values(debugEntries)
-            .execute()
-            .catch(err => console.error(`[Debug Log Error] ${err}`))
+        // Debug logging disabled to reduce WAL growth
+        // await ctx.db
+        //     .insertInto('feed_debug_log')
+        //     .values(debugEntries)
+        //     .execute()
+        //     .catch(err => console.error(`[Debug Log Error] ${err}`))
     }
 
     const feed = page.map((p) => ({ post: p.post.uri }))

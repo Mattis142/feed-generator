@@ -201,10 +201,10 @@ export class FeedGenerator {
         .where('servedAt', '<', sixHoursAgo)
         .executeTakeFirst()
 
-      // Cleanup seen posts older than 8 hours (longer retention for better fatigue tracking)
-      const eightHoursAgo = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString()
+      // Cleanup seen posts older than 7 days (permanent fatigue tracking)
+      const seenSevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
       const cleanedSeen = await this.db.deleteFrom('user_seen_post')
-        .where('seenAt', '<', eightHoursAgo)
+        .where('seenAt', '<', seenSevenDaysAgo)
         .executeTakeFirst()
 
       if (cleanedServed.numDeletedRows > 0) {
@@ -400,19 +400,20 @@ export class FeedGenerator {
   }
 
   private async cleanupDebugLogs() {
-    try {
-      const debugRetentionLimit = new Date(Date.now() - 5 * 60 * 1000).toISOString()
-      const deleted = await this.db
-        .deleteFrom('feed_debug_log')
-        .where('servedAt', '<', debugRetentionLimit)
-        .executeTakeFirst()
+    // Debug logging disabled - no cleanup needed
+    // try {
+    //   const debugRetentionLimit = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    //   const deleted = await this.db
+    //     .deleteFrom('feed_debug_log')
+    //     .where('servedAt', '<', debugRetentionLimit)
+    //     .executeTakeFirst()
       
-      if (deleted.numDeletedRows > 0) {
-        console.log(`[Debug Cleanup] Removed ${deleted.numDeletedRows} old debug log entries`)
-      }
-    } catch (err) {
-      console.error('Failed to cleanup debug logs', err)
-    }
+    //   if (deleted.numDeletedRows > 0) {
+    //     console.log(`[Debug Cleanup] Removed ${deleted.numDeletedRows} old debug log entries`)
+    //   }
+    // } catch (err) {
+    //   console.error('Failed to cleanup debug logs', err)
+    // }
   }
 }
 

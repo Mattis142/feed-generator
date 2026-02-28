@@ -200,12 +200,17 @@ async function serveFromBatchesOrFallback(
       let adjustedScore = c.effectiveScore
       const author = extractAuthor(c.uri)
 
-      // 1. InteractionSeen fatigue penalty - Permanent -50% multiplier per view
+      // 1. InteractionSeen fatigue penalty - Permanent -80% multiplier per view, with hard cutoff after 3 views
       const seenCount = seenCountMap[c.uri] || 0
       if (seenCount > 0) {
-        // Apply permanent -50% multiplier per view
-        const seenMultiplier = Math.pow(0.5, seenCount) // 0.5^seenCount
-        adjustedScore *= seenMultiplier
+        if (seenCount >= 3) {
+          // Hard cutoff: never serve after 3 views regardless of score
+          adjustedScore = -501
+        } else {
+          // Apply permanent -80% multiplier per view
+          const seenMultiplier = Math.pow(0.2, seenCount) // 0.2^seenCount
+          adjustedScore *= seenMultiplier
+        }
       }
 
       // 2. Author fatigue penalty - Soft penalty
@@ -331,11 +336,12 @@ async function serveFromBatchesOrFallback(
       servedAt: new Date().toISOString(),
     }))
 
-    ctx.db
-      .insertInto('feed_debug_log')
-      .values(debugEntries)
-      .execute()
-      .catch(err => console.error(`[Semantic Debug Log Error] ${err}`))
+    // Debug logging disabled to reduce WAL growth
+    // ctx.db
+    //   .insertInto('feed_debug_log')
+    //   .values(debugEntries)
+    //   .execute()
+    //   .catch(err => console.error(`[Semantic Debug Log Error] ${err}`))
   }
 
   const feed = page.map(c => ({ post: c.uri }))
