@@ -1,6 +1,20 @@
 version: '3.8'
 
 services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
   postgres:
     image: postgres:15-alpine
     container_name: postgres-db
@@ -38,8 +52,8 @@ services:
     build: .
     container_name: bsky-api
     command: ["yarn", "start:api"]
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
       - POSTGRES_CONNECTION_STRING=postgresql://bsky:bskypassword@postgres:5432/repo
       - QDRANT_URL=http://qdrant:6333
@@ -68,4 +82,8 @@ volumes:
   qdrant_storage:
     driver: local
   postgres_storage:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
     driver: local
