@@ -11,6 +11,7 @@ export default function (server: Server, ctx: AppContext) {
         'app.bsky.feed.generator',
         shortname,
       ).toString(),
+      acceptsInteractions: true, // Experimental: Some clients might look here too
     }))
     return {
       encoding: 'application/json',
