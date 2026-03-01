@@ -9,7 +9,7 @@ const run = async () => {
   const server = FeedGenerator.create({
     port: maybeInt(process.env.FEEDGEN_PORT) ?? 3000,
     listenhost: maybeStr(process.env.FEEDGEN_LISTENHOST) ?? 'localhost',
-    postgresConnectionString: maybeStr(process.env.POSTGRES_CONNECTION_STRING) ?? 'postgresql://bsky:bskypassword@localhost:5432/repo',
+    postgresConnectionString: (process.env.USE_REMOTE_DB === 'true' && process.env.POSTGRES_CONNECTION_STRING_REMOTE) ? process.env.POSTGRES_CONNECTION_STRING_REMOTE : (maybeStr(process.env.POSTGRES_CONNECTION_STRING) ?? 'postgresql://bsky:bskypassword@localhost:5432/repo'),
     subscriptionEndpoint:
       maybeStr(process.env.FEEDGEN_SUBSCRIPTION_ENDPOINT) ??
       'wss://bsky.network',

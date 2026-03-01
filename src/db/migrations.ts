@@ -517,3 +517,18 @@ migrations['018'] = {
       .execute()
   },
 }
+
+migrations['019'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .alterTable('graph_interaction')
+      .addColumn('interactionUri', 'varchar')
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema
+      .alterTable('graph_interaction')
+      .dropColumn('interactionUri')
+      .execute()
+  },
+}

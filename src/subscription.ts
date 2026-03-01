@@ -231,6 +231,7 @@ export class JetstreamSubscription {
               type: 'like',
               weight: 1,
               indexedAt: new Date().toISOString(),
+              interactionUri: uri,
             })
           }
 
@@ -271,6 +272,7 @@ export class JetstreamSubscription {
               type: 'repost',
               weight: 2,
               indexedAt: new Date().toISOString(),
+              interactionUri: uri,
             })
           }
 
@@ -297,6 +299,7 @@ export class JetstreamSubscription {
             type: 'reply',
             weight: 1,
             indexedAt: new Date().toISOString(),
+            interactionUri: uri,
           })
         }
 

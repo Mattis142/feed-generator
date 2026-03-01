@@ -4,10 +4,10 @@ import { Database } from '../db'
 import { getTasteSimilarUsers, getPostsLikedBySimilarUsers, updateTasteReputation } from './taste-similarity'
 
 // Account diversity function to prevent same author from appearing consecutively
-function applyAccountDiversity(posts: Array<{ post: any; score: number; signals?: any }>): Array<{ post: any; score: number; signals?: any }> {
+function applyAccountDiversity(posts: Array<{ post: any; score: number; signals?: any; repostUri?: string }>): Array<{ post: any; score: number; signals?: any; repostUri?: string }> {
     if (posts.length <= 1) return posts
 
-    const result: Array<{ post: any; score: number; signals?: any }> = []
+    const result: Array<{ post: any; score: number; signals?: any; repostUri?: string }> = []
     const usedAuthors = new Set<string>()
     const remainingPosts = [...posts]
 
@@ -447,7 +447,7 @@ export const handler = async (
     const postUris = uniquePosts.map(p => p.uri)
     const interactions = await ctx.db
         .selectFrom('graph_interaction')
-        .select(['target', 'type', 'actor'])
+        .select(['target', 'type', 'actor', 'interactionUri'])
         .where('target', 'in', postUris.length > 0 ? postUris : ['dummy'])
         .where((eb) => eb.or([
             eb('actor', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy']),
@@ -455,13 +455,19 @@ export const handler = async (
         ]))
         .execute()
 
-    const networkEffortMap: Record<string, { likes: number, reposts: number, actors: Set<string> }> = {}
+    const networkEffortMap: Record<string, { likes: number, reposts: number, actors: Set<string>, repostUri?: string }> = {}
     interactions.forEach(int => {
         if (!networkEffortMap[int.target]) {
             networkEffortMap[int.target] = { likes: 0, reposts: 0, actors: new Set() }
         }
         if (int.type === 'like') networkEffortMap[int.target].likes++
-        if (int.type === 'repost') networkEffortMap[int.target].reposts++
+        if (int.type === 'repost') {
+            networkEffortMap[int.target].reposts++
+            // Track the repost URI if it's from a Layer 1 follow (direct friend)
+            if (int.interactionUri && layer1Dids.has(int.actor) && !networkEffortMap[int.target].repostUri) {
+                networkEffortMap[int.target].repostUri = int.interactionUri
+            }
+        }
         networkEffortMap[int.target].actors.add(int.actor)
     })
 
@@ -880,7 +886,7 @@ export const handler = async (
             fatiguePenalty = Math.round(score * (1 - seenMultiplier)) // Track penalty amount
             signals['seen_fatigue_multiplier'] = Math.round(seenMultiplier * 1000) / 1000
             signals['seen_fatigue_penalty'] = fatiguePenalty
-            
+
             // Log significant fatigue penalties
             if (seenCount >= 2) {
                 console.log(`[InteractionSeen Fatigue] Applied ${Math.round(seenMultiplier * 100)}% score (${seenCount} views): ${post.uri.slice(-10)}`)
@@ -990,7 +996,7 @@ export const handler = async (
         score += jitter
         signals['jitter'] = jitter
 
-        return { post, score: Math.round(score), signals }
+        return { post, score: Math.round(score), signals, repostUri: networkInteractions?.repostUri }
     })
 
     // Filter and Dedup with Advanced Reply Logic
@@ -1066,7 +1072,7 @@ export const handler = async (
     // Advanced Thread Deduplication with Reply Intelligence
     const threadCounts: Record<string, number> = {}
     const conversationCounts: Record<string, number> = {} // Track conversation clusters
-    const finalPool: Array<{ post: any; score: number; signals?: any }> = []
+    const finalPool: Array<{ post: any; score: number; signals?: any; repostUri?: string }> = []
 
     // Sort by score first
     const sortedCandidatePool = filtered.sort((a, b) => b.score - a.score)
@@ -1122,7 +1128,16 @@ export const handler = async (
     if (batchMode) {
         console.log(`[Batch Mode] Returning ${finalPool.length} scored candidates (no fatigue/diversity applied)`)
         return {
-            feed: finalPool.map((p) => ({ post: p.post.uri })),
+            feed: finalPool.map((p) => {
+                const item: any = { post: p.post.uri }
+                if (p.repostUri && !layer1Dids.has(p.post.author)) {
+                    item.reason = {
+                        $type: 'app.bsky.feed.defs#skeletonReasonRepost',
+                        repost: p.repostUri
+                    }
+                }
+                return item
+            }),
             cursor: undefined,
             // Attach full post data + scores for the batch pipeline to use
             _batchData: finalPool.map((p) => ({
@@ -1187,7 +1202,16 @@ export const handler = async (
         //     .catch(err => console.error(`[Debug Log Error] ${err}`))
     }
 
-    const feed = page.map((p) => ({ post: p.post.uri }))
+    const feed = page.map((p) => {
+        const item: any = { post: p.post.uri }
+        if (p.repostUri && !layer1Dids.has(p.post.author)) {
+            item.reason = {
+                $type: 'app.bsky.feed.defs#skeletonReasonRepost',
+                repost: p.repostUri
+            }
+        }
+        return item
+    })
     const last = page[page.length - 1]
     const cursor =
         last && page.length === limit

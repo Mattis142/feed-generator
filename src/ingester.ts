@@ -7,7 +7,7 @@ import { logger } from './logger'
 const run = async () => {
     dotenv.config()
 
-    const postgresConnectionString = process.env.POSTGRES_CONNECTION_STRING ?? 'postgresql://bsky:bskypassword@localhost:5432/repo'
+    const postgresConnectionString = (process.env.USE_REMOTE_DB === 'true' && process.env.POSTGRES_CONNECTION_STRING_REMOTE) ? process.env.POSTGRES_CONNECTION_STRING_REMOTE : (process.env.POSTGRES_CONNECTION_STRING ?? 'postgresql://bsky:bskypassword@localhost:5432/repo')
     const subscriptionEndpoint = process.env.FEEDGEN_SUBSCRIPTION_ENDPOINT ?? 'wss://bsky.network'
     const publisherDid = process.env.FEEDGEN_PUBLISHER_DID ?? 'did:example:alice'
     const whitelist = (process.env.FEEDGEN_WHITELIST ?? '').split(',').filter(Boolean)

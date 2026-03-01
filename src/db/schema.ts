@@ -48,6 +48,7 @@ export type GraphInteraction = {
   type: 'like' | 'repost' | 'reply'
   weight: number
   indexedAt: string
+  interactionUri?: string
 }
 
 export type GraphMeta = {
