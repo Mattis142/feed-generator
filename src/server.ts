@@ -37,6 +37,16 @@ export class FeedGenerator {
 
   static create(cfg: Config) {
     const app = express()
+
+    // Global logging middleware to catch EVERYTHING
+    app.use((req, _res, next) => {
+      console.log(`[TRAFFIC] ${req.method} ${req.url}`)
+      if (req.method === 'POST') {
+        console.log(`[TRAFFIC] POST Headers: ${JSON.stringify(req.headers, null, 2)}`)
+      }
+      next()
+    })
+
     const db = createDb(cfg.postgresConnectionString)
 
     const didCache = new MemoryCache()
