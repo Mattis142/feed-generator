@@ -27,6 +27,7 @@ export class JetstreamSubscription {
   private pendingReplyCounts = new Map<string, number>()
   private pendingGraphInteractions: any[] = []
   private batchInterval: NodeJS.Timeout | null = null
+  private isFlushing = false
 
   constructor(db: Database, service: string, config: JetstreamConfig) {
     this.db = db
@@ -36,7 +37,10 @@ export class JetstreamSubscription {
   }
 
   private async flushBatch() {
+    if (this.isFlushing) return
     if (this.pendingLikes.size === 0 && this.pendingReposts.size === 0 && this.pendingPosts.length === 0 && this.pendingPostDeletes.size === 0 && this.pendingReplyCounts.size === 0 && this.pendingGraphInteractions.length === 0) return
+
+    this.isFlushing = true
 
     const likesToFlush = new Map(this.pendingLikes)
     const repostsToFlush = new Map(this.pendingReposts)
@@ -72,24 +76,35 @@ export class JetstreamSubscription {
           }
         }
 
-        const sortedLikesToFlush = Array.from(likesToFlush.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-        for (const [uri, count] of sortedLikesToFlush) {
-          await trx.updateTable('post')
-            .set((eb) => ({ likeCount: eb('likeCount', '+', count) }))
-            .where('uri', '=', uri)
-            .execute()
+        // Aggregate all updates perfectly per URI
+        const postUpdates = new Map<string, { likes: number, reposts: number, replies: number }>()
+        for (const [uri, count] of likesToFlush.entries()) {
+          const u = postUpdates.get(uri) || { likes: 0, reposts: 0, replies: 0 }
+          u.likes += count
+          postUpdates.set(uri, u)
         }
-        const sortedRepostsToFlush = Array.from(repostsToFlush.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-        for (const [uri, count] of sortedRepostsToFlush) {
-          await trx.updateTable('post')
-            .set((eb) => ({ repostCount: eb('repostCount', '+', count) }))
-            .where('uri', '=', uri)
-            .execute()
+        for (const [uri, count] of repostsToFlush.entries()) {
+          const u = postUpdates.get(uri) || { likes: 0, reposts: 0, replies: 0 }
+          u.reposts += count
+          postUpdates.set(uri, u)
         }
-        const sortedReplyCountsToFlush = Array.from(replyCountsToFlush.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-        for (const [uri, count] of sortedReplyCountsToFlush) {
+        for (const [uri, count] of replyCountsToFlush.entries()) {
+          const u = postUpdates.get(uri) || { likes: 0, reposts: 0, replies: 0 }
+          u.replies += count
+          postUpdates.set(uri, u)
+        }
+
+        const sortedUpdates = Array.from(postUpdates.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+
+        for (const [uri, counts] of sortedUpdates) {
           await trx.updateTable('post')
-            .set((eb) => ({ replyCount: eb('replyCount', '+', count) }))
+            .set((eb) => {
+              const updates: any = {}
+              if (counts.likes > 0) updates.likeCount = eb('likeCount', '+', counts.likes)
+              if (counts.reposts > 0) updates.repostCount = eb('repostCount', '+', counts.reposts)
+              if (counts.replies > 0) updates.replyCount = eb('replyCount', '+', counts.replies)
+              return updates
+            })
             .where('uri', '=', uri)
             .execute()
         }
@@ -119,6 +134,8 @@ export class JetstreamSubscription {
       for (const [uri, count] of likesToFlush.entries()) this.pendingLikes.set(uri, (this.pendingLikes.get(uri) || 0) + count)
       for (const [uri, count] of repostsToFlush.entries()) this.pendingReposts.set(uri, (this.pendingReposts.get(uri) || 0) + count)
       for (const [uri, count] of replyCountsToFlush.entries()) this.pendingReplyCounts.set(uri, (this.pendingReplyCounts.get(uri) || 0) + count)
+    } finally {
+      this.isFlushing = false
     }
   }
 
