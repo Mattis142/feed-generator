@@ -43,9 +43,6 @@ export class FeedGenerator {
       const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress
       const ua = req.headers['user-agent']
       console.log(`[TRAFFIC] ${req.method} ${req.url} (IP: ${ip}, UA: ${ua})`)
-      if (req.method === 'POST') {
-        console.log(`[TRAFFIC] POST Headers: ${JSON.stringify(req.headers, null, 2)}`)
-      }
       next()
     })
 
