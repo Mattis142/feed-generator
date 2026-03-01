@@ -1300,46 +1300,33 @@ export async function updateAuthorFatigueOnServe(
 
         console.log(`[Author Fatigue Update] Served: ${authorDid.slice(-10)} to ${userDid.slice(-10)} (serves: ${newServeCount}, fatigue: ${newFatigueScore.toFixed(1)})`)
     } else {
-        // Create new fatigue record using upsert to handle race conditions
-        try {
-            await ctx.db
-                .insertInto('user_author_fatigue')
-                .values({
-                    userDid,
-                    authorDid,
-                    serveCount: 1,
-                    lastServedAt: now,
-                    fatigueScore: 10, // Starting fatigue score
-                    affinityScore: 1.0, // Starting base affinity
-                    interactionWeight: 0.1, // Initial weight
-                    lastInteractionAt: null,
-                    interactionCount: 0,
-                    updatedAt: now
-                })
-                .execute()
+        // Create new fatigue record — use ON CONFLICT to handle concurrent inserts safely
+        await ctx.db
+            .insertInto('user_author_fatigue')
+            .values({
+                userDid,
+                authorDid,
+                serveCount: 1,
+                lastServedAt: now,
+                fatigueScore: 10, // Starting fatigue score
+                affinityScore: 1.0, // Starting base affinity
+                interactionWeight: 0.1, // Initial weight
+                lastInteractionAt: null,
+                interactionCount: 0,
+                updatedAt: now
+            })
+            .onConflict((oc) => oc
+                .columns(['userDid', 'authorDid'])
+                .doUpdateSet((eb) => ({
+                    serveCount: eb('excluded.serveCount', '+', eb.ref('user_author_fatigue.serveCount')),
+                    lastServedAt: eb.ref('excluded.lastServedAt'),
+                    fatigueScore: eb('user_author_fatigue.fatigueScore', '+', 10),
+                    updatedAt: eb.ref('excluded.updatedAt'),
+                }))
+            )
+            .execute()
 
-            console.log(`[Author Fatigue Create] New record: ${authorDid.slice(-10)} for ${userDid.slice(-10)}`)
-        } catch (error: any) {
-            // Handle race condition - if record already exists, update it instead
-            if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-                // Record was created by another process, try to update it
-                await ctx.db
-                    .updateTable('user_author_fatigue')
-                    .set((eb) => ({
-                        serveCount: eb('serveCount', '+', 1),
-                        lastServedAt: now,
-                        fatigueScore: eb('fatigueScore', '+', 10),
-                        updatedAt: now
-                    }))
-                    .where('userDid', '=', userDid)
-                    .where('authorDid', '=', authorDid)
-                    .execute()
-
-                console.log(`[Author Fatigue Race Fix] Updated existing record: ${authorDid.slice(-10)} for ${userDid.slice(-10)}`)
-            } else {
-                throw error
-            }
-        }
+        console.log(`[Author Fatigue Create] New record: ${authorDid.slice(-10)} for ${userDid.slice(-10)}`)
     }
 }
 
@@ -1416,57 +1403,37 @@ export async function updateAuthorFatigueOnInteraction(
 
             console.log(`[Author Fatigue Recovery] ${interactionType}: ${authorDid.slice(-10)} by ${userDid.slice(-10)} (fatigue: ${existing.fatigueScore.toFixed(1)} → ${newFatigueScore.toFixed(1)})`)
         } else {
-            // Create new fatigue record with positive interaction using upsert to handle race conditions
-            try {
-                await ctx.db
-                    .insertInto('user_author_fatigue')
-                    .values({
-                        userDid,
-                        authorDid,
-                        serveCount: 0,
-                        lastServedAt: now,
-                        fatigueScore: 0, // Start with no fatigue since user interacted positively
-                        affinityScore: 2.0, // Interaction boosts initial affinity
-                        interactionWeight: 1.5, // Initial weight for active author
-                        lastInteractionAt: now,
-                        interactionCount: 1,
-                        updatedAt: now
-                    })
-                    .execute()
+            // Create new fatigue record with positive interaction — use ON CONFLICT to handle concurrent inserts safely
+            const fatigueReduction = interactionType === 'like' ? 25 : interactionType === 'repost' ? 30 : 20
 
-                console.log(`[Author Fatigue Create] New record with interaction: ${authorDid.slice(-10)} for ${userDid.slice(-10)}`)
-            } catch (error: any) {
-                // Handle race condition - if record already exists, update it instead
-                if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-                    // Record was created by another process, try to update it
-                    let fatigueReduction = 0
-                    if (interactionType === 'like') {
-                        fatigueReduction = 25
-                    } else if (interactionType === 'repost') {
-                        fatigueReduction = 30
-                    } else if (interactionType === 'reply') {
-                        fatigueReduction = 20
-                    }
+            await ctx.db
+                .insertInto('user_author_fatigue')
+                .values({
+                    userDid,
+                    authorDid,
+                    serveCount: 0,
+                    lastServedAt: now,
+                    fatigueScore: 0, // Start with no fatigue since user interacted positively
+                    affinityScore: 2.0, // Interaction boosts initial affinity
+                    interactionWeight: 1.5, // Initial weight for active author
+                    lastInteractionAt: now,
+                    interactionCount: 1,
+                    updatedAt: now
+                })
+                .onConflict((oc) => oc
+                    .columns(['userDid', 'authorDid'])
+                    .doUpdateSet((eb) => ({
+                        interactionCount: eb('user_author_fatigue.interactionCount', '+', 1),
+                        lastInteractionAt: eb.ref('excluded.lastInteractionAt'),
+                        fatigueScore: eb('user_author_fatigue.fatigueScore', '-', fatigueReduction),
+                        affinityScore: eb('user_author_fatigue.affinityScore', '+', 0.5),
+                        interactionWeight: eb('user_author_fatigue.interactionWeight', '+', 1.0),
+                        updatedAt: eb.ref('excluded.updatedAt'),
+                    }))
+                )
+                .execute()
 
-                    await ctx.db
-                        .updateTable('user_author_fatigue')
-                        .set((eb) => ({
-                            interactionCount: eb('interactionCount', '+', 1),
-                            lastInteractionAt: now,
-                            fatigueScore: eb('fatigueScore', '-', Math.max(fatigueReduction, 0)),
-                            affinityScore: eb('affinityScore', '+', 0.5),
-                            interactionWeight: eb('interactionWeight', '+', 1.0),
-                            updatedAt: now
-                        }))
-                        .where('userDid', '=', userDid)
-                        .where('authorDid', '=', authorDid)
-                        .execute()
-
-                    console.log(`[Author Fatigue Race Fix] Updated existing record with interaction: ${authorDid.slice(-10)} for ${userDid.slice(-10)}`)
-                } else {
-                    throw error
-                }
-            }
+            console.log(`[Author Fatigue Create] New record with interaction: ${authorDid.slice(-10)} for ${userDid.slice(-10)}`)
         }
     }
 }
