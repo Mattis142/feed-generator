@@ -72,19 +72,22 @@ export class JetstreamSubscription {
           }
         }
 
-        for (const [uri, count] of likesToFlush.entries()) {
+        const sortedLikesToFlush = Array.from(likesToFlush.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+        for (const [uri, count] of sortedLikesToFlush) {
           await trx.updateTable('post')
             .set((eb) => ({ likeCount: eb('likeCount', '+', count) }))
             .where('uri', '=', uri)
             .execute()
         }
-        for (const [uri, count] of repostsToFlush.entries()) {
+        const sortedRepostsToFlush = Array.from(repostsToFlush.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+        for (const [uri, count] of sortedRepostsToFlush) {
           await trx.updateTable('post')
             .set((eb) => ({ repostCount: eb('repostCount', '+', count) }))
             .where('uri', '=', uri)
             .execute()
         }
-        for (const [uri, count] of replyCountsToFlush.entries()) {
+        const sortedReplyCountsToFlush = Array.from(replyCountsToFlush.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+        for (const [uri, count] of sortedReplyCountsToFlush) {
           await trx.updateTable('post')
             .set((eb) => ({ replyCount: eb('replyCount', '+', count) }))
             .where('uri', '=', uri)
