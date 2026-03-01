@@ -49,9 +49,9 @@ export class FeedGenerator {
     const server = createServer({
       validateResponse: true,
       payload: {
-        jsonLimit: 100 * 1024, // 100kb
-        textLimit: 100 * 1024, // 100kb
-        blobLimit: 5 * 1024 * 1024, // 5mb
+        jsonLimit: 1024 * 1024, // 1mb
+        textLimit: 1024 * 1024, // 1mb
+        blobLimit: 10 * 1024 * 1024, // 10mb
       },
     })
     const ctx: AppContext = {

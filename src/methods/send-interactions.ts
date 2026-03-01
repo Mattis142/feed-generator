@@ -5,14 +5,19 @@ import { validateAuth } from '../auth'
 
 export default function (server: Server, ctx: AppContext) {
   server.app.bsky.feed.sendInteractions(async ({ input, req }) => {
-    console.log('Received interactions request - full input:', JSON.stringify(input, null, 2))
+    console.log('--- [INTERACTIONS DEBUG START] ---')
+    console.log('Full Input Keys:', Object.keys(input))
+    console.log('Full Input Content:', JSON.stringify(input, null, 2))
+    console.log('Headers:', JSON.stringify(req.headers, null, 2))
+    console.log('Raw Body Keys:', req.body ? Object.keys(req.body) : 'No Body')
 
     // Get the actual user DID from authentication
     const userDid = await validateAuth(req, ctx.cfg.serviceDid, ctx.didResolver)
+    console.log('Authenticated User:', userDid)
 
-    // The actual data is nested in input.body.interactions
-    const interactions = (input as any).body?.interactions
-    console.log('Received interactions - interactions field:', interactions)
+    // Robust extraction: check both input.body.interactions and input.interactions
+    const interactions = (input as any).body?.interactions || (input as any).interactions
+    console.log('Extracted Interactions:', JSON.stringify(interactions, null, 2))
 
     if (interactions && interactions.length > 0) {
       console.log(`✅ Received ${interactions.length} interactions:`)
