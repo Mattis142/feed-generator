@@ -533,16 +533,24 @@ migrations['019'] = {
   },
 }
 
-migrations['020'] = {
+migrations['021'] = {
   async up(db: Kysely<any>) {
+    // Remove the unique constraint/index to allow counting multiple views
+    await db.schema.dropIndex('user_seen_post_unique_idx').execute()
+    // Re-create as a non-unique index for performance
+    await db.schema
+      .createIndex('user_seen_post_user_uri_idx_v2')
+      .on('user_seen_post')
+      .columns(['userDid', 'uri'])
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropIndex('user_seen_post_user_uri_idx_v2').execute()
     await db.schema
       .createIndex('user_seen_post_unique_idx')
       .on('user_seen_post')
       .columns(['userDid', 'uri'])
       .unique()
       .execute()
-  },
-  async down(db: Kysely<any>) {
-    await db.schema.dropIndex('user_seen_post_unique_idx').execute()
   },
 }

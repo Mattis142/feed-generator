@@ -44,7 +44,6 @@ export default function (server: Server, ctx: AppContext) {
           await ctx.db
             .insertInto('user_seen_post')
             .values(seenRecords)
-            .onConflict((oc) => oc.columns(['userDid', 'uri']).doNothing())
             .execute()
 
           console.log(`[Seen Interactions] Stored ${seenRecords.length} seen posts for user ${userDid.slice(0, 10)}...`)
