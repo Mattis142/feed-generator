@@ -1,5 +1,6 @@
 import dotenv from 'dotenv'
 import FeedGenerator from './server'
+import { logger } from './logger'
 
 const run = async () => {
   dotenv.config()
@@ -39,4 +40,7 @@ const maybeInt = (val?: string) => {
   return int
 }
 
-run()
+run().catch(err => {
+  logger.error('FATAL STARTUP ERROR', err)
+  process.exit(1)
+})
