@@ -157,8 +157,8 @@ async function run() {
                 console.log('[Batch Pipeline] Optimizing AppView fetching for image metadata only...')
 
                 // Separate posts by image content
-                const postsWithImages = postsToEmbed.filter((p: any) => p.hasImage === 1)
-                const postsWithoutImages = postsToEmbed.filter((p: any) => p.hasImage !== 1)
+                const postsWithImages = postsToEmbed.filter((p: any) => p.hasImage)
+                const postsWithoutImages = postsToEmbed.filter((p: any) => !p.hasImage)
 
                 // Check for posts without text (rare fallback case)
                 const postsNeedingTextCheck = postsWithoutImages.filter((p: any) => !p.text || p.text.trim().length === 0)
@@ -328,12 +328,32 @@ async function run() {
             if (uniqueLikedUris.length > 0) {
                 // First pass: check which liked posts are already embedded in Qdrant
                 try {
+                    // Fetch post details from local DB to filter for quality
+                    const likedMetadataRows = await db
+                        .selectFrom('post')
+                        .select(['uri', 'text', 'hasImage'])
+                        .where('uri', 'in', uniqueLikedUris)
+                        .execute()
+
+                    const likedMetadataMap = new Map<string, typeof likedMetadataRows[0]>()
+                    likedMetadataRows.forEach(r => likedMetadataMap.set(r.uri, r))
+
                     for (let i = 0; i < uniqueLikedUris.length; i += 100) {
                         const batch = uniqueLikedUris.slice(i, i + 100)
+
+                        // Quality Filter: only use posts that have an image OR at least 40 characters of text
+                        const qualityBatch = batch.filter(uri => {
+                            const meta = likedMetadataMap.get(uri)
+                            if (!meta) return true // Fallback if meta missing
+                            return meta.hasImage || (meta.text && meta.text.trim().length > 40)
+                        })
+
+                        if (qualityBatch.length === 0) continue
+
                         const scrollResult = await qdrantDB.getClient().scroll('feed_post_embeddings', {
                             filter: {
                                 must: [
-                                    { key: 'uri', match: { any: batch } },
+                                    { key: 'uri', match: { any: qualityBatch } },
                                     { key: 'discoveredBy', match: { value: userDid } }
                                 ]
                             },

@@ -355,7 +355,7 @@ export const handler = async (
         .selectFrom('post')
         .selectAll()
         .where('indexedAt', '>', lookback30d)
-        .where('likeCount', '>', batchMode ? 0 : 1) // Looser in batch mode
+        .where('likeCount', '>', batchMode ? 4 : 2) // Higher threshold to filter out low-quality/random content
         .limit(batchMode ? 5000 : 1000)
         .execute()
 
