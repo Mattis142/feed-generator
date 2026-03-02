@@ -12,8 +12,6 @@ export default function (server: Server, ctx: AppContext) {
     const interactions = (input as any).body?.interactions || (input as any).interactions
 
     if (interactions && interactions.length > 0) {
-      const seenEvents = interactions.filter((i: any) => i.event === 'app.bsky.feed.defs#interactionSeen')
-      console.log(`[sendInteractions] Received ${interactions.length} total events (${seenEvents.length} interactionSeen) for ${userDid.slice(-10)}`)
       // Store seen interactions in the database
       const now = new Date().toISOString()
       const seenRecords = interactions
@@ -34,7 +32,7 @@ export default function (server: Server, ctx: AppContext) {
             .insertInto('user_seen_post')
             .values(seenRecords)
             .execute()
-          console.log(`[Seen Interactions] Stored ${seenRecords.length} seen posts for ${userDid.slice(-10)}`)
+
 
           // Background processing for everything else to keep response fast
           const processBackgroundInteractions = async () => {

@@ -162,7 +162,7 @@ async function serveFromBatchesOrFallback(
   const likedUris = new Set(likedPosts.map(r => r.target))
 
   // 2. InteractionSeen fatigue: posts seen recently get penalized
-  const fatigueLookback = new Date(now - 6 * 60 * 60 * 1000).toISOString()
+  const fatigueLookback = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString()
   const seenPosts = await ctx.db
     .selectFrom('user_seen_post')
     .select(['uri', 'seenAt'])

@@ -195,10 +195,9 @@ export const handler = async (
         }
     }
 
-    // 1.8. InteractionSeen Fatigue (Memory) + User Interaction Tracking
-    // Fetch posts the user has actually SEEN in the last 6 hours for accurate fatigue tracking
+    // Fetch posts the user has actually SEEN in the last 7 days for accurate fatigue tracking
     // Note: We use user_seen_post based on InteractionSeen API for precise view tracking
-    const fatigueLookback = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
+    const fatigueLookback = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
     const seenPosts = await ctx.db
         .selectFrom('user_seen_post')
         .select(['uri', 'seenAt'])
@@ -874,14 +873,14 @@ export const handler = async (
             }
         }
 
-        // InteractionSeen Fatigue Penalty - Permanent -50% multiplier per view
+        // InteractionSeen Fatigue Penalty - Permanent -80% multiplier per view
         const seenCount = seenCountMap[post.uri] || 0
         const lastSeenAt = seenTimeMap[post.uri]
         let fatiguePenalty = 0
 
         if (seenCount > 0 && lastSeenAt && !batchMode) {
-            // Apply permanent -50% multiplier per view
-            const seenMultiplier = Math.pow(0.5, seenCount) // 0.5^seenCount
+            // Apply permanent -80% multiplier per view
+            const seenMultiplier = Math.pow(0.2, seenCount) // 0.2^seenCount
             score *= seenMultiplier
             fatiguePenalty = Math.round(score * (1 - seenMultiplier)) // Track penalty amount
             signals['seen_fatigue_multiplier'] = Math.round(seenMultiplier * 1000) / 1000
@@ -1007,15 +1006,14 @@ export const handler = async (
             return false // Never show liked posts again
         }
 
-        // HARD FILTER: Completely remove posts with 0 engagement that have been seen 3+ times
+        // HARD FILTER: Completely remove posts that have been seen 3+ times
         const seenCount = seenCountMap[sp.post.uri] || 0
-        const hasZeroEngagement = (sp.post.likeCount || 0) === 0 && (sp.post.repostCount || 0) === 0
-        if (hasZeroEngagement && seenCount >= 3) {
-            // Only log extreme zero engagement removals (> 15 serves)
+        if (seenCount >= 3) {
+            // Log extreme zero engagement removals (> 15 serves)
             if (seenCount >= 15) {
-                console.log(`[Zero Engagement Filter] Removing post seen ${seenCount} times with 0 engagement: ${sp.post.uri.slice(-10)}`)
+                console.log(`[InteractionSeen Filter] Removing post seen ${seenCount} times: ${sp.post.uri.slice(-10)}`)
             }
-            return false // Never show zero-engagement posts after 3 views
+            return false // Never show posts after 3 views
         }
 
         // Always allow original posts through standard criteria
