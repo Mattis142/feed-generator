@@ -89,23 +89,88 @@ async function cleanupDatabase(db: any) {
             .where('seenAt', '<', sevenDaysAgo)
             .execute()
 
-        // To prevent unbounded growth of global posts, delete old posts 
-        // that have very low engagement (or all old posts if disk gets tight,
-        // but here we sweep posts older than 3 days with no engagement)
+        // --- Tiered post pruning (batched to prevent deadlocks with concurrent inserts) ---
+        // We use DELETE WHERE uri IN (SELECT uri ... LIMIT N) so only a fixed number
+        // of rows are locked at once, allowing ingester writes to proceed between batches.
         const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+        const sevenDaysAgoPost = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
 
-        // Postgres specific DELETE using kysely
-        const deletedPosts = await db.deleteFrom('post')
-            .where('indexedAt', '<', threeDaysAgo)
-            .where('likeCount', '=', 0)
-            .where('repostCount', '=', 0)
-            // Only delete if NO ONE we track follows them (this prevents deleting content meant for timeline)
-            //.where('author', 'not in', (eb) => eb.selectFrom('graph_follow').select('followee')) 
-            .executeTakeFirst()
+        let totalDeleted = 0
 
-        logger.info(`Cleanup complete. Cleaned empty global posts: ${deletedPosts.numDeletedRows}`)
+        // Tier 1: posts older than 3 days with zero engagement (original rule)
+        const tier1 = await deletePostsBatched(db, threeDaysAgo, 0, 0, 5000)
+        totalDeleted += tier1
+
+        // Small pause between tiers to reduce contention
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        // Tier 2: posts older than 7 days with low engagement (< 5 likes, < 2 reposts)
+        // Cuts the long tail that the zero-engagement filter misses
+        const tier2 = await deletePostsBatched(db, sevenDaysAgoPost, 5, 2, 5000)
+        totalDeleted += tier2
+
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        // Tier 3: posts older than 30 days — delete everything.
+        // The algorithm never looks back more than 30 days, so this data is useless.
+        const tier3 = await deletePostsBatchedAll(db, thirtyDaysAgo, 5000)
+        totalDeleted += tier3
+
+        logger.info(`Cleanup complete. Pruned posts: ${totalDeleted} (t1:${tier1}, t2:${tier2}, t3:${tier3})`)
     } catch (err) {
         logger.error('Failed during Postgres background cleanup:', err)
+    }
+}
+
+/**
+ * Batched delete for posts with zero engagement older than cutoff.
+ * Uses a subquery with LIMIT to lock only a fixed number of rows at a time,
+ * preventing deadlocks with concurrent ingester inserts.
+ */
+async function deletePostsBatched(db: any, cutoff: string, maxLikes: number, maxReposts: number, batchSize: number): Promise<number> {
+    try {
+        const result = await db.deleteFrom('post')
+            .where('uri', 'in', (eb: any) =>
+                eb.selectFrom('post')
+                    .select('uri')
+                    .where('indexedAt', '<', cutoff)
+                    .where('likeCount', '<=', maxLikes)
+                    .where('repostCount', '<=', maxReposts)
+                    .limit(batchSize)
+            )
+            .executeTakeFirst()
+        return Number(result?.numDeletedRows ?? 0)
+    } catch (err: any) {
+        if (err?.code === '40P01') { // Postgres deadlock error code
+            logger.warn('Deadlock during post cleanup (tier), will retry next cycle')
+            return 0
+        }
+        throw err
+    }
+}
+
+/**
+ * Batched delete for ALL posts older than cutoff (regardless of engagement).
+ * Used for the 30-day full sweep.
+ */
+async function deletePostsBatchedAll(db: any, cutoff: string, batchSize: number): Promise<number> {
+    try {
+        const result = await db.deleteFrom('post')
+            .where('uri', 'in', (eb: any) =>
+                eb.selectFrom('post')
+                    .select('uri')
+                    .where('indexedAt', '<', cutoff)
+                    .limit(batchSize)
+            )
+            .executeTakeFirst()
+        return Number(result?.numDeletedRows ?? 0)
+    } catch (err: any) {
+        if (err?.code === '40P01') { // Postgres deadlock error code
+            logger.warn('Deadlock during post cleanup (30d sweep), will retry next cycle')
+            return 0
+        }
+        throw err
     }
 }
 

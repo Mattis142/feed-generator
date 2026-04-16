@@ -136,8 +136,9 @@ async function serveFromBatchesOrFallback(
     const impactMultiplier = Math.max(0, 1 - (batchAgeHours / BATCH_TTL_HOURS))
 
     // Combined score: pipelineScore weight + semantic score weight with decay
-    // Semantic matches are valuable, but must not overwhelm the social graph (scaled down from 5000)
-    const effectiveScore = row.pipelineScore * 0.3 + row.semanticScore * 1800 * impactMultiplier
+    // Increased pipelineScore weight (0.5) to ensure followed accounts compete well
+    // against pure semantic matches. Reduced semantic multiplier (1200) to balance.
+    const effectiveScore = row.pipelineScore * 0.5 + row.semanticScore * 1200 * impactMultiplier
 
     return {
       uri: row.uri,
