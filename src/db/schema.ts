@@ -133,4 +133,5 @@ export type UserCandidateBatch = {
   batchId: string          // UUID identifying this batch
   generatedAt: string      // ISO timestamp — used for linear decay
   pipelineSignals: string  // JSON string containing granular scoring signals from the batching phase
+  clusterBreakdown: string // JSON string containing {clusterId: similarityScore} for all matching magnets
 }

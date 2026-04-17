@@ -635,6 +635,7 @@ async function run() {
                 centroidId: number;
                 pipelineScore: number;
                 pipelineSignals: any;
+                allClusterScores: Record<number, number>;
             }> = []
 
             // Build a pipeline score map
@@ -678,6 +679,7 @@ async function run() {
                             centroidId: centroid.clusterId,
                             pipelineScore,
                             pipelineSignals,
+                            allClusterScores: { [centroid.clusterId]: hit.score },
                         })
                     }
                 } catch (err) {
@@ -685,12 +687,20 @@ async function run() {
                 }
             }
 
-            // Deduplicate — keep the highest score per URI
+            // Deduplicate — keep the highest score per URI, but collate all cluster scores
             const deduped = new Map<string, typeof semanticCandidates[0]>()
             for (const c of semanticCandidates) {
                 const existing = deduped.get(c.uri)
-                if (!existing || c.semanticScore > existing.semanticScore) {
+                if (!existing) {
                     deduped.set(c.uri, c)
+                } else {
+                    // Update cluster scores map
+                    existing.allClusterScores[c.centroidId] = c.semanticScore
+                    // Ensure the main semanticScore is the maximum encountered
+                    if (c.semanticScore > existing.semanticScore) {
+                        existing.semanticScore = c.semanticScore
+                        existing.centroidId = c.centroidId
+                    }
                 }
             }
 
@@ -725,6 +735,7 @@ async function run() {
                                     batchId,
                                     generatedAt,
                                     pipelineSignals: JSON.stringify(c.pipelineSignals || {}),
+                                    clusterBreakdown: JSON.stringify(c.allClusterScores || {}),
                                 })))
                                 .execute()
                             break // Success

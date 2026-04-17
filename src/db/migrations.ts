@@ -583,3 +583,18 @@ migrations['022'] = {
       .execute()
   },
 }
+
+migrations['023'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .alterTable('user_candidate_batch')
+      .addColumn('clusterBreakdown', 'text')
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema
+      .alterTable('user_candidate_batch')
+      .dropColumn('clusterBreakdown')
+      .execute()
+  },
+}

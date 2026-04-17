@@ -150,6 +150,7 @@ async function serveFromBatchesOrFallback(
       impactMultiplier,
       source: 'semantic_batch' as const,
       pipelineSignals: row.pipelineSignals ? JSON.parse(row.pipelineSignals) : {},
+      clusterBreakdown: row.clusterBreakdown ? JSON.parse(row.clusterBreakdown) : {},
     }
   })
 
@@ -429,7 +430,12 @@ function generateFeedContext(trace: any): string {
     parts.push(`pipe:${trace.pipelineScore.toFixed(1)}`)
     parts.push(`dec:${trace.impactMultiplier.toFixed(2)}`)
     if (trace.centroidId !== undefined && trace.centroidId !== -1) {
-      parts.push(`c:${trace.centroidId}`)
+      const breakdown = trace.clusterBreakdown || {}
+      const clusterEntries = Object.entries(breakdown)
+        .sort((a, b) => (b[1] as number) - (a[1] as number))
+        .map(([id, score]) => `c${id}:${(score as number).toFixed(2)}`)
+      
+      parts.push(clusterEntries.join('|'))
     }
     
     // Base Pipeline Markers

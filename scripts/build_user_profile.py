@@ -29,6 +29,54 @@ def weighted_average(vectors: np.ndarray, weights: np.ndarray) -> np.ndarray:
     return avg
 
 
+def consolidate_centroids(centroids: list, threshold: float = 0.85) -> list:
+    """
+    Ensure centroids are distinct by merging those that are too similar.
+    Implements the 'Magnet' model by preventing redundant/overlapping poles.
+    """
+    if len(centroids) <= 1:
+        return centroids
+
+    final_centroids = []
+    # Sort by weight descending to ensure strong magnets stay stable
+    centroids.sort(key=lambda c: c['weight'], reverse=True)
+    
+    while centroids:
+        base = centroids.pop(0)
+        to_merge_indices = []
+        
+        for i, other in enumerate(centroids):
+            similarity = np.dot(base['centroid'], other['centroid'])
+            if similarity > threshold:
+                to_merge_indices.append(i)
+        
+        if to_merge_indices:
+            # Merge similar centroids into the base
+            print(f"  [Magnet] Consolidating {len(to_merge_indices)} centroids into Cluster {base['clusterId']} (similarity > {threshold})", file=sys.stderr)
+            base_vec = np.array(base['centroid']) * base['weight']
+            total_weight = base['weight']
+            total_posts = base['postCount']
+            
+            for i in sorted(to_merge_indices, reverse=True):
+                m = centroids.pop(i)
+                base_vec += np.array(m['centroid']) * m['weight']
+                total_weight += m['weight']
+                total_posts += m['postCount']
+            
+            # Re-normalize the new consolidated magnet
+            norm = np.linalg.norm(base_vec)
+            if norm > 0:
+                base_vec = base_vec / norm
+            
+            base['centroid'] = base_vec.tolist()
+            base['weight'] = total_weight
+            base['postCount'] = total_posts
+            
+        final_centroids.append(base)
+        
+    return final_centroids
+
+
 def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size: int = 5) -> list:
     """
     Cluster interest vectors using HDBSCAN and return centroids.
@@ -37,10 +85,10 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
     """
     import hdbscan
 
-    # Run HDBSCAN
+    # Run HDBSCAN with slightly looser params to find more candidates for magnets
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size,
-        min_samples=2,
+        min_cluster_size=max(2, min_cluster_size - 2), # More granular initial clusters
+        min_samples=1,
         metric='euclidean',
         cluster_selection_method='eom',
     )
@@ -50,60 +98,71 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
     # Remove noise label (-1)
     unique_labels.discard(-1)
 
+    raw_centroids = []
     if len(unique_labels) == 0:
         # HDBSCAN found no clusters — fall back to single centroid
-        centroid = weighted_average(vectors, weights)
-        return [{
+        raw_centroids = [{
             'clusterId': 0,
-            'centroid': centroid.tolist(),
+            'centroid': weighted_average(vectors, weights).tolist(),
             'weight': 1.0,
             'postCount': int(len(vectors)),
         }]
+    else:
+        # Compute centroid for each cluster
+        total_weight = 0.0
+        for label in sorted(unique_labels):
+            mask = labels == label
+            cluster_vectors = vectors[mask]
+            cluster_weights = weights[mask]
+            cluster_weight_sum = float(np.sum(cluster_weights))
+            total_weight += cluster_weight_sum
 
-    # Compute centroid for each cluster
-    centroids = []
-    total_weight = 0.0
+            centroid = weighted_average(cluster_vectors, cluster_weights)
+            raw_centroids.append({
+                'clusterId': int(label),
+                'centroid': centroid.tolist(),
+                'weight': cluster_weight_sum,
+                'postCount': int(np.sum(mask)),
+            })
 
-    for label in sorted(unique_labels):
-        mask = labels == label
-        cluster_vectors = vectors[mask]
-        cluster_weights = weights[mask]
-        cluster_weight_sum = float(np.sum(cluster_weights))
-        total_weight += cluster_weight_sum
+    # Consolidate magnets to ensure distinct poles
+    centroids = consolidate_centroids(raw_centroids, threshold=0.82)
 
-        centroid = weighted_average(cluster_vectors, cluster_weights)
-        centroids.append({
-            'clusterId': int(label),
-            'centroid': centroid.tolist(),
-            'weight': cluster_weight_sum,
-            'postCount': int(np.sum(mask)),
-        })
-
-    # Also include noise points as a low-weight "miscellaneous" cluster
+    # Also include significant noise points as a Low-Pass Miscellaneous cluster
     noise_mask = labels == -1
     noise_count = int(np.sum(noise_mask))
-    if noise_count >= 3:
+    if noise_count >= 5:
         noise_vectors = vectors[noise_mask]
         noise_weights = weights[noise_mask]
         noise_weight_sum = float(np.sum(noise_weights))
-        total_weight += noise_weight_sum
-
+        
         centroid = weighted_average(noise_vectors, noise_weights)
-        centroids.append({
-            'clusterId': max(c['clusterId'] for c in centroids) + 1,
-            'centroid': centroid.tolist(),
-            'weight': noise_weight_sum,
-            'postCount': noise_count,
-        })
+        
+        # Check if noise is too similar to any existing magnet
+        is_distinct = True
+        for c in centroids:
+            similarity = np.dot(centroid, c['centroid'])
+            if similarity > 0.85:
+                is_distinct = False
+                break
+        
+        if is_distinct:
+            centroids.append({
+                'clusterId': max([c['clusterId'] for c in centroids] + [-1]) + 1,
+                'centroid': centroid.tolist(),
+                'weight': noise_weight_sum,
+                'postCount': noise_count,
+            })
 
     # Normalize weights to sum to 1.0
-    if total_weight > 0:
+    total_final_weight = sum(c['weight'] for c in centroids)
+    if total_final_weight > 0:
         for c in centroids:
-            c['weight'] = c['weight'] / total_weight
+            c['weight'] = c['weight'] / total_final_weight
 
-    # Sort by weight descending, keep top 5
+    # Sort by weight descending, keep up to 10 magnets (more diversity)
     centroids.sort(key=lambda c: c['weight'], reverse=True)
-    centroids = centroids[:5]
+    centroids = centroids[:10]
 
     # Re-normalize after truncation
     weight_sum = sum(c['weight'] for c in centroids)
