@@ -59,13 +59,12 @@ const run = async () => {
         }
     }
 
-    // Start background database pruning (every 30 mins)
-    setInterval(() => cleanupDatabase(db), 30 * 60 * 1000)
+    // Start background database pruning (every 24 hours to reduce contention)
+    setInterval(() => cleanupDatabase(db), 24 * 60 * 60 * 1000)
     // Refresh graph followers every 15 mins
     setInterval(() => refreshTrackedDids(), 15 * 60 * 1000)
 
-    // Run once on startup
-    setTimeout(() => cleanupDatabase(db), 5000)
+    // Run graph refresh on startup
     setTimeout(() => refreshTrackedDids(), 5000)
 
     logger.info('Ingester running and subscribed to global firehose.')
@@ -98,8 +97,19 @@ async function cleanupDatabase(db: any) {
 
         let totalDeleted = 0
 
+        const runBatchPurger = async (fn: () => Promise<number>) => {
+            let deletedInTier = 0
+            while (true) {
+                const count = await fn()
+                deletedInTier += count
+                if (count < 5000) break
+                await new Promise(resolve => setTimeout(resolve, 500))
+            }
+            return deletedInTier
+        }
+
         // Tier 1: posts older than 3 days with zero engagement (original rule)
-        const tier1 = await deletePostsBatched(db, threeDaysAgo, 0, 0, 5000)
+        const tier1 = await runBatchPurger(() => deletePostsBatched(db, threeDaysAgo, 0, 0, 5000))
         totalDeleted += tier1
 
         // Small pause between tiers to reduce contention
@@ -107,14 +117,14 @@ async function cleanupDatabase(db: any) {
 
         // Tier 2: posts older than 7 days with low engagement (< 5 likes, < 2 reposts)
         // Cuts the long tail that the zero-engagement filter misses
-        const tier2 = await deletePostsBatched(db, sevenDaysAgoPost, 5, 2, 5000)
+        const tier2 = await runBatchPurger(() => deletePostsBatched(db, sevenDaysAgoPost, 5, 2, 5000))
         totalDeleted += tier2
 
         await new Promise(resolve => setTimeout(resolve, 500))
 
         // Tier 3: posts older than 30 days — delete everything.
         // The algorithm never looks back more than 30 days, so this data is useless.
-        const tier3 = await deletePostsBatchedAll(db, thirtyDaysAgo, 5000)
+        const tier3 = await runBatchPurger(() => deletePostsBatchedAll(db, thirtyDaysAgo, 5000))
         totalDeleted += tier3
 
         logger.info(`Cleanup complete. Pruned posts: ${totalDeleted} (t1:${tier1}, t2:${tier2}, t3:${tier3})`)
@@ -137,6 +147,10 @@ async function deletePostsBatched(db: any, cutoff: string, maxLikes: number, max
                     .where('indexedAt', '<', cutoff)
                     .where('likeCount', '<=', maxLikes)
                     .where('repostCount', '<=', maxReposts)
+                    // Never prune posts that are currently in an active semantic batch for ANY user
+                    .where('uri', 'not in', (eb: any) =>
+                        eb.selectFrom('user_candidate_batch').select('uri')
+                    )
                     .limit(batchSize)
             )
             .executeTakeFirst()
@@ -161,6 +175,10 @@ async function deletePostsBatchedAll(db: any, cutoff: string, batchSize: number)
                 eb.selectFrom('post')
                     .select('uri')
                     .where('indexedAt', '<', cutoff)
+                    // Never prune posts that are currently in an active semantic batch for ANY user
+                    .where('uri', 'not in', (eb: any) =>
+                        eb.selectFrom('user_candidate_batch').select('uri')
+                    )
                     .limit(batchSize)
             )
             .executeTakeFirst()

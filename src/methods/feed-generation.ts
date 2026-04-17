@@ -218,8 +218,8 @@ async function serveFromBatchesOrFallback(
       // 2. Author fatigue penalty - Soft penalty
       const fatigueScore = authorFatigueMap[author] || 0
       if (fatigueScore > 0) {
-        // High fatigue (100) = -1200 score (significant but allows very high matches to pass)
-        adjustedScore -= (fatigueScore / 100) * 1200
+        // High fatigue (100) = -800 score (scaled down to match new semantic weights)
+        adjustedScore -= (fatigueScore / 100) * 800
       }
 
       return { ...c, author, adjustedScore }
