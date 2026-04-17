@@ -135,11 +135,17 @@ def process_batch(input_file, output_file, model_path, batch_size=32):
     
     # Process texts in batches
     if all_texts:
-        print(f"Processing {len(all_texts)} texts in batches...", file=sys.stderr)
+        print(f"Processing {len(all_texts)} texts in batches of {batch_size}...", file=sys.stderr)
         with torch.no_grad():
-            text_tokens = open_clip.tokenize(all_texts).to(device)
-            text_embeddings = model.encode_text(text_tokens)
-            text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
+            all_text_embeddings = []
+            for i in range(0, len(all_texts), batch_size):
+                batch_texts = all_texts[i:i + batch_size]
+                text_tokens = open_clip.tokenize(batch_texts).to(device)
+                batch_embeddings = model.encode_text(text_tokens)
+                batch_embeddings /= batch_embeddings.norm(dim=-1, keepdim=True)
+                all_text_embeddings.append(batch_embeddings)
+            
+            text_embeddings = torch.cat(all_text_embeddings, dim=0)
             
         # Map back to posts
         for (post_idx, text), emb in zip(text_to_post, text_embeddings):
@@ -167,11 +173,17 @@ def process_batch(input_file, output_file, model_path, batch_size=32):
     
     # Process alt texts in batches
     if all_alt_texts:
-        print(f"Processing {len(all_alt_texts)} alt texts in batches...", file=sys.stderr)
+        print(f"Processing {len(all_alt_texts)} alt texts in batches of {batch_size}...", file=sys.stderr)
         with torch.no_grad():
-            alt_tokens = open_clip.tokenize(all_alt_texts).to(device)
-            alt_embeddings = model.encode_text(alt_tokens)
-            alt_embeddings /= alt_embeddings.norm(dim=-1, keepdim=True)
+            all_alt_embeddings = []
+            for i in range(0, len(all_alt_texts), batch_size):
+                batch_alts = all_alt_texts[i:i + batch_size]
+                alt_tokens = open_clip.tokenize(batch_alts).to(device)
+                batch_embeddings = model.encode_text(alt_tokens)
+                batch_embeddings /= batch_embeddings.norm(dim=-1, keepdim=True)
+                all_alt_embeddings.append(batch_embeddings)
+            
+            alt_embeddings = torch.cat(all_alt_embeddings, dim=0)
             
         # Map back to posts
         for (post_idx, alt_idx, _), emb in zip(alt_text_to_post, alt_embeddings):
