@@ -240,7 +240,7 @@ async function run() {
 
                 try {
                     const { stdout, stderr } = await execAsync(
-                        `python3 "${scriptPath}" "${inputPath}" "${outputPath}" --model-path "${modelPath}" --batch-size 32`,
+                        `python3 "${scriptPath}" "${inputPath}" "${outputPath}" --model-path "${modelPath}" --batch-size 12`,
                         { maxBuffer: 50 * 1024 * 1024 } // 50MB buffer for large outputs
                     )
                     if (stderr) console.log(`[Batch Pipeline] Python stderr: ${stderr.slice(0, 500)}`)
@@ -443,7 +443,7 @@ async function run() {
                         try {
                             const modelPath = join(process.cwd(), 'models', 'mobileclip2_s2.pt')
                             const { stderr: likeStderr } = await execAsync(
-                                `python3 "${join(process.cwd(), 'scripts', 'embed_posts.py')}" "${likeEmbedInputPath}" "${likeEmbedOutputPath}" --model-path "${modelPath}" --batch-size 32`
+                                `python3 "${join(process.cwd(), 'scripts', 'embed_posts.py')}" "${likeEmbedInputPath}" "${likeEmbedOutputPath}" --model-path "${modelPath}" --batch-size 12`
                             )
                             if (likeStderr) console.log('[Batch Pipeline] Liked-post embed stderr:', likeStderr.trim().split('\n').slice(-2).join(' | '))
 
