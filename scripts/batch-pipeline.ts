@@ -227,6 +227,7 @@ async function run() {
                             console.error(`[Batch Pipeline] Failed to fetch post details for batch ${i}:`, err)
                         }
                     }
+                    console.log(`\n  [AppView] Candidates fetched: Done.`)
                 }
 
                 // Write enriched posts to temp file for Python script
@@ -435,6 +436,7 @@ async function run() {
                             console.error(`[Batch Pipeline] Failed to fetch liked post details batch ${i}:`, err)
                         }
                     }
+                    console.log(`\n  [AppView] Liked posts fetched: Done.`)
 
                     if (richLikedPosts.length > 0) {
                         // Embed them using the same Python script
