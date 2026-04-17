@@ -151,6 +151,7 @@ async function serveFromBatchesOrFallback(
     }
   })
 
+  console.log(`[Semantic Serve Debug] Raw batchRows: ${batchRows.length}, Unique deduplicated: ${Object.values(uniqueBatchRowsMap).length}, Decayed: ${decayed.length}`)
   // --- Real-time filters ---
 
   // 1. Filter already-liked posts
@@ -232,13 +233,36 @@ async function serveFromBatchesOrFallback(
   // --- Account diversity: prevent same author from dominating ---
   const diversified: typeof filtered = []
   const recentAuthors: string[] = []
+  const authorCounts: Record<string, number> = {}
+
+  // We'll do a simple multi-pass to stagger authors rather than discarding them entirely
+  const delayed: typeof filtered = []
 
   for (const candidate of filtered) {
-    // Account diversity: don't allow same author in last 2 slots (relaxed from 3)
-    if (recentAuthors.slice(-2).includes(candidate.author)) continue
+    const counts = authorCounts[candidate.author] || 0
+    if (counts >= 4) continue // Hard limit: max 4 posts per author per batch completely
+
+    // If author is in the last 2 slots, delay them to spread them out
+    if (recentAuthors.slice(-2).includes(candidate.author)) {
+      delayed.push(candidate)
+      continue
+    }
 
     diversified.push(candidate)
     recentAuthors.push(candidate.author)
+    authorCounts[candidate.author] = counts + 1
+  }
+
+  // Second pass: append the delayed posts where possible
+  for (const candidate of delayed) {
+    const counts = authorCounts[candidate.author] || 0
+    if (counts >= 4) continue
+
+    if (!recentAuthors.slice(-2).includes(candidate.author)) {
+      diversified.push(candidate)
+      recentAuthors.push(candidate.author)
+      authorCounts[candidate.author] = counts + 1
+    }
   }
 
   console.log(`[Semantic Serve] After filters: ${filtered.length} → ${diversified.length} (${likedUris.size} liked filtered, serving fatigue applied)`)
