@@ -148,6 +148,7 @@ async function serveFromBatchesOrFallback(
       centroidId: row.centroidId,
       batchId: row.batchId,
       impactMultiplier,
+      source: 'semantic_batch' as const,
     }
   })
 
@@ -204,25 +205,37 @@ async function serveFromBatchesOrFallback(
 
       // 1. InteractionSeen fatigue penalty - Permanent -80% multiplier per view, with hard cutoff after 3 views
       const seenCount = seenCountMap[c.uri] || 0
+      let seenMultiplier = 1
       if (seenCount > 0) {
         if (seenCount >= 3) {
           // Hard cutoff: never serve after 3 views regardless of score
           adjustedScore = -9999
+          seenMultiplier = 0
         } else {
           // Apply permanent -80% multiplier per view
-          const seenMultiplier = Math.pow(0.2, seenCount) // 0.2^seenCount
+          seenMultiplier = Math.pow(0.2, seenCount) // 0.2^seenCount
           adjustedScore *= seenMultiplier
         }
       }
 
       // 2. Author fatigue penalty - Soft penalty
       const fatigueScore = authorFatigueMap[author] || 0
+      let fatiguePenalty = 0
       if (fatigueScore > 0) {
         // High fatigue (100) = -800 score (scaled down to match new semantic weights)
-        adjustedScore -= (fatigueScore / 100) * 800
+        fatiguePenalty = (fatigueScore / 100) * 800
+        adjustedScore -= fatiguePenalty
       }
 
-      return { ...c, author, adjustedScore }
+      return { 
+        ...c, 
+        author, 
+        adjustedScore,
+        seenCount,
+        seenMultiplier,
+        fatigueScore,
+        fatiguePenalty,
+      }
     })
     // Relaxed filter: Allow fatigued posts to pass so they sink to the bottom, keeping batch populated
     .filter(c => c.adjustedScore > -2000)
@@ -297,7 +310,12 @@ async function serveFromBatchesOrFallback(
         pipelineScore: 0,
         impactMultiplier: 1,
         centroidId: -1,
-        batchId: 'live_interspliced'
+        batchId: 'live_interspliced',
+        source: 'live_interspliced' as const,
+        seenCount: 0,
+        seenMultiplier: 1,
+        fatigueScore: 0,
+        fatiguePenalty: 0,
       }))
 
     // Merge and re-sort
@@ -332,7 +350,8 @@ async function serveFromBatchesOrFallback(
 
   const page = slicePool.slice(0, limit)
 
-  const semanticCount = page.filter(p => (p as any).batchId !== 'live_interspliced').length
+  // --- Logging and Metrics ---
+  const semanticCount = page.filter(p => (p as any).source !== 'live_interspliced').length
   const liveCount = page.length - semanticCount
 
   // Log semantic serve metrics
@@ -344,32 +363,35 @@ async function serveFromBatchesOrFallback(
     : '0'
   console.log(`[Semantic Serve] Serving ${page.length} items (${semanticCount} semantic, ${liveCount} live) - avg semantic: ${avgSemantic}, avg impact: ${avgImpact}`)
 
-  // Log debug entries for served semantic posts
-  if (page.length > 0) {
-    const debugEntries = page.map(p => ({
+  // Log debug entries and collect feedContext
+  const debugEntries: any[] = []
+  const feed = page.map(c => {
+    const trace = c as any
+    const context = generateFeedContext(trace)
+    
+    debugEntries.push({
       userDid: requesterDid,
-      uri: p.uri,
-      score: Math.round(p.adjustedScore),
-      signals: JSON.stringify({
-        semanticScore: (p as any).semanticScore || 0,
-        pipelineScore: (p as any).pipelineScore || 0,
-        impactMultiplier: Number(((p as any).impactMultiplier || 1).toFixed(3)),
-        centroidId: (p as any).centroidId || -1,
-        batchId: (p as any).batchId || 'live_interspliced',
-        source: (p as any).batchId === 'live_interspliced' ? 'live_interspliced' : 'semantic_batch',
-      }),
+      uri: trace.uri,
+      score: Math.round(trace.adjustedScore),
+      signals: JSON.stringify(trace),
       servedAt: new Date().toISOString(),
-    }))
+    })
+    
+    return { 
+      post: trace.uri,
+      feedContext: context
+    }
+  })
 
-    // Debug logging disabled to reduce WAL growth
-    // ctx.db
-    //   .insertInto('feed_debug_log')
-    //   .values(debugEntries)
-    //   .execute()
-    //   .catch(err => console.error(`[Semantic Debug Log Error] ${err}`))
+  // Re-enable debug logging
+  if (debugEntries.length > 0) {
+    ctx.db
+      .insertInto('feed_debug_log')
+      .values(debugEntries)
+      .execute()
+      .catch(err => console.error(`[Semantic Debug Log Error] ${err}`))
   }
 
-  const feed = page.map(c => ({ post: c.uri }))
   const last = page[page.length - 1]
   const cursor =
     last && page.length === limit
@@ -393,4 +415,32 @@ async function serveFromBatchesOrFallback(
   }
 
   return { feed, cursor }
+}
+
+function generateFeedContext(trace: any): string {
+  const parts: string[] = []
+  parts.push(`v1`)
+  parts.push(`s:${Math.round(trace.adjustedScore)}`)
+  
+  if (trace.source === 'semantic_batch') {
+    parts.push(`src:sem`)
+    parts.push(`sem:${trace.semanticScore.toFixed(3)}`)
+    parts.push(`pipe:${trace.pipelineScore.toFixed(1)}`)
+    parts.push(`dec:${trace.impactMultiplier.toFixed(2)}`)
+    if (trace.centroidId !== undefined && trace.centroidId !== -1) {
+      parts.push(`c:${trace.centroidId}`)
+    }
+  } else {
+    parts.push(`src:live`)
+  }
+
+  if (trace.seenCount > 0) {
+    parts.push(`seen:${trace.seenCount}(x${trace.seenMultiplier.toFixed(2)})`)
+  }
+
+  if (trace.fatigueScore > 0) {
+    parts.push(`auth:${trace.fatigueScore}(-${Math.round(trace.fatiguePenalty)})`)
+  }
+
+  return parts.join(';')
 }
