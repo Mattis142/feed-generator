@@ -568,3 +568,18 @@ migrations['021'] = {
       .execute()
   },
 }
+
+migrations['022'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .alterTable('user_candidate_batch')
+      .addColumn('pipelineSignals', 'text')
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema
+      .alterTable('user_candidate_batch')
+      .dropColumn('pipelineSignals')
+      .execute()
+  },
+}

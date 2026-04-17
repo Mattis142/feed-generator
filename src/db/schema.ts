@@ -132,4 +132,5 @@ export type UserCandidateBatch = {
   centroidId: number       // which interest cluster matched
   batchId: string          // UUID identifying this batch
   generatedAt: string      // ISO timestamp — used for linear decay
+  pipelineSignals: string  // JSON string containing granular scoring signals from the batching phase
 }

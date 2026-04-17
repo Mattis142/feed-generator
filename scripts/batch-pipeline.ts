@@ -634,12 +634,13 @@ async function run() {
                 semanticScore: number;
                 centroidId: number;
                 pipelineScore: number;
+                pipelineSignals: any;
             }> = []
 
             // Build a pipeline score map
-            const pipelineScoreMap = new Map<string, number>()
+            const pipelineScoreMap = new Map<string, { score: number; signals: any }>()
             for (const p of batchData) {
-                pipelineScoreMap.set(p.uri, p.score)
+                pipelineScoreMap.set(p.uri, { score: p.score, signals: p.signals })
             }
 
             for (const centroid of userCentroids) {
@@ -667,13 +668,16 @@ async function run() {
 
                         // NEW: If the post was NOT in our social graph pipeline, apply the Discovery Sandbox Penalty
                         // This prevents unexpected "global" content from bypassing filters
-                        let pipelineScore = pipelineScoreMap.get(uri) ?? -4000 // Standard sandbox penalty for new discovery
+                        const pipelineInfo = pipelineScoreMap.get(uri)
+                        let pipelineScore = pipelineInfo?.score ?? -4000 // Standard sandbox penalty for new discovery
+                        let pipelineSignals = pipelineInfo?.signals ?? { sandbox_penalty: -4000, cold_score: 50 }
 
                         semanticCandidates.push({
                             uri,
                             semanticScore: hit.score,
                             centroidId: centroid.clusterId,
                             pipelineScore,
+                            pipelineSignals,
                         })
                     }
                 } catch (err) {
@@ -720,6 +724,7 @@ async function run() {
                                     centroidId: c.centroidId,
                                     batchId,
                                     generatedAt,
+                                    pipelineSignals: JSON.stringify(c.pipelineSignals || {}),
                                 })))
                                 .execute()
                             break // Success

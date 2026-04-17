@@ -149,6 +149,7 @@ async function serveFromBatchesOrFallback(
       batchId: row.batchId,
       impactMultiplier,
       source: 'semantic_batch' as const,
+      pipelineSignals: row.pipelineSignals ? JSON.parse(row.pipelineSignals) : {},
     }
   })
 
@@ -430,6 +431,15 @@ function generateFeedContext(trace: any): string {
     if (trace.centroidId !== undefined && trace.centroidId !== -1) {
       parts.push(`c:${trace.centroidId}`)
     }
+    
+    // Base Pipeline Markers
+    const sigs = trace.pipelineSignals || {}
+    if (sigs.layer1) parts.push('l1:1')
+    if (sigs.layer2) parts.push('l2:1')
+    if (sigs.interacted) parts.push('int:1')
+    if (sigs.keyword_discovery) parts.push('kwd:1')
+    if (sigs.taste_discovery) parts.push('tsd:1')
+    if (sigs.sandbox_penalty < -1000) parts.push('sb:1')
   } else {
     parts.push(`src:live`)
   }
