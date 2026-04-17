@@ -85,11 +85,11 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
     """
     import hdbscan
 
-    # Run HDBSCAN with slightly looser params to find more candidates for magnets
+    # Run HDBSCAN with cosine metric (appropriate for normalized embeddings)
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=max(2, min_cluster_size - 2), # More granular initial clusters
-        min_samples=1,
-        metric='euclidean',
+        min_cluster_size=min_cluster_size,  # Keep at specified threshold for better separation
+        min_samples=2,  # Require at least 2 samples per cluster
+        metric='cosine',  # Cosine distance for embedding vectors
         cluster_selection_method='eom',
     )
     labels = clusterer.fit_predict(vectors)
@@ -98,9 +98,12 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
     # Remove noise label (-1)
     unique_labels.discard(-1)
 
+    print(f"    HDBSCAN Result: {len(unique_labels)} clusters found + {int(np.sum(labels == -1))} noise points", file=sys.stderr)
+
     raw_centroids = []
     if len(unique_labels) == 0:
         # HDBSCAN found no clusters — fall back to single centroid
+        print(f"    ⚠️  No clusters detected by HDBSCAN, falling back to single weighted average", file=sys.stderr)
         raw_centroids = [{
             'clusterId': 0,
             'centroid': weighted_average(vectors, weights).tolist(),
@@ -124,9 +127,11 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
                 'weight': cluster_weight_sum,
                 'postCount': int(np.sum(mask)),
             })
+            print(f"    Raw Cluster {int(label)}: {int(np.sum(mask))} items ({cluster_weight_sum:.2f} weight)", file=sys.stderr)
 
-    # Consolidate magnets to ensure distinct poles
-    centroids = consolidate_centroids(raw_centroids, threshold=0.82)
+    # Consolidate magnets to ensure distinct poles (lowered threshold for more diversity)
+    print(f"    Consolidating with 0.70 similarity threshold...", file=sys.stderr)
+    centroids = consolidate_centroids(raw_centroids, threshold=0.70)
 
     # Also include significant noise points as a Low-Pass Miscellaneous cluster
     noise_mask = labels == -1
@@ -142,11 +147,13 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
         is_distinct = True
         for c in centroids:
             similarity = np.dot(centroid, c['centroid'])
-            if similarity > 0.85:
+            if similarity > 0.70:  # Lowered threshold to match consolidation
                 is_distinct = False
+                print(f"    Noise cluster too similar to Cluster {c['clusterId']} ({similarity:.3f} > 0.70), skipping", file=sys.stderr)
                 break
         
         if is_distinct:
+            print(f"    Adding noise cluster: {noise_count} items ({noise_weight_sum:.2f} weight)", file=sys.stderr)
             centroids.append({
                 'clusterId': max([c['clusterId'] for c in centroids] + [-1]) + 1,
                 'centroid': centroid.tolist(),
