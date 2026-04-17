@@ -189,6 +189,7 @@ async function run() {
                     const urisToFetch = postsToFetch.map((p: any) => p.uri)
                     for (let i = 0; i < urisToFetch.length; i += 25) {
                         const batchUris = urisToFetch.slice(i, i + 25)
+                        process.stdout.write(`\r  [AppView] Fetching candidates: ${i}/${urisToFetch.length}...`)
                         try {
                             const res = await publicAgent.getPosts({ uris: batchUris })
                             if (res.success) {
@@ -202,8 +203,8 @@ async function run() {
                                         if (postView.embed.images) {
                                             // @ts-ignore
                                             postView.embed.images.forEach((img: any) => {
-                                                if (img.fullsize) image_urls.push(img.fullsize)
-                                                else if (img.thumb) image_urls.push(img.thumb)
+                                                if (img.thumb) image_urls.push(img.thumb)
+                                                else if (img.fullsize) image_urls.push(img.fullsize)
                                                 if (img.alt) alt_text.push(img.alt)
                                             })
                                         }
@@ -404,6 +405,7 @@ async function run() {
                     const urisToFetch = missingPosts.map((p: any) => p.uri)
                     for (let i = 0; i < urisToFetch.length; i += 25) {
                         const batchUris = urisToFetch.slice(i, i + 25)
+                        process.stdout.write(`\r  [AppView] Fetching liked posts: ${i}/${urisToFetch.length}...`)
                         try {
                             const res = await publicAgent.getPosts({ uris: batchUris })
                             if (res.success) {
@@ -415,7 +417,8 @@ async function run() {
                                     if (postView.embed && postView.embed.images) {
                                         // @ts-ignore
                                         postView.embed.images.forEach((img: any) => {
-                                            if (img.fullsize) image_urls.push(img.fullsize)
+                                            if (img.thumb) image_urls.push(img.thumb)
+                                            else if (img.fullsize) image_urls.push(img.fullsize)
                                             if (img.alt) alt_text.push(img.alt)
                                         })
                                     }

@@ -79,7 +79,8 @@ async function run() {
         if (postView.embed && postView.embed.images) {
             // @ts-ignore
             postView.embed.images.forEach((img: any) => {
-                if (img.fullsize) image_urls.push(img.fullsize)
+                if (img.thumb) image_urls.push(img.thumb)
+                else if (img.fullsize) image_urls.push(img.fullsize)
                 if (img.alt) alt_text.push(img.alt)
             })
         }
