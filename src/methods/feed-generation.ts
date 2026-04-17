@@ -206,7 +206,7 @@ async function serveFromBatchesOrFallback(
       if (seenCount > 0) {
         if (seenCount >= 3) {
           // Hard cutoff: never serve after 3 views regardless of score
-          adjustedScore = -501
+          adjustedScore = -9999
         } else {
           // Apply permanent -80% multiplier per view
           const seenMultiplier = Math.pow(0.2, seenCount) // 0.2^seenCount
@@ -223,8 +223,8 @@ async function serveFromBatchesOrFallback(
 
       return { ...c, author, adjustedScore }
     })
-    // Relaxed filter: Allow slightly fatigued posts to pass if they are still "close"
-    .filter(c => c.adjustedScore > -500)
+    // Relaxed filter: Allow fatigued posts to pass so they sink to the bottom, keeping batch populated
+    .filter(c => c.adjustedScore > -2000)
 
   // Sort by adjusted score
   filtered.sort((a, b) => b.adjustedScore - a.adjustedScore)
