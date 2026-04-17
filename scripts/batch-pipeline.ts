@@ -81,13 +81,8 @@ async function run() {
     }
 
     // Get active users (whitelisted users)
-    const targetDid = process.argv[2]
     let activeUsers: string[] = []
-    
-    if (targetDid && targetDid.startsWith('did:')) {
-        console.log(`[Batch Pipeline] Target user detected: ${targetDid}`)
-        activeUsers = [targetDid]
-    } else if (whitelist.length > 0) {
+    if (whitelist.length > 0) {
         activeUsers = whitelist
     } else {
         // Fallback: get users who have been served posts recently
