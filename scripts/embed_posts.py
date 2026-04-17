@@ -139,6 +139,7 @@ def process_batch(input_file, output_file, model_path, batch_size=32):
         with torch.no_grad():
             all_text_embeddings = []
             for i in range(0, len(all_texts), batch_size):
+                print(f"  [Progress] Texts: {i}/{len(all_texts)}...", file=sys.stderr)
                 batch_texts = all_texts[i:i + batch_size]
                 text_tokens = open_clip.tokenize(batch_texts).to(device)
                 batch_embeddings = model.encode_text(text_tokens)
@@ -158,6 +159,7 @@ def process_batch(input_file, output_file, model_path, batch_size=32):
         print(f"Processing {len(all_images)} images in batches of {batch_size}...", file=sys.stderr)
         with torch.no_grad():
             for i in range(0, len(all_images), batch_size):
+                print(f"  [Progress] Images: {i}/{len(all_images)}...", file=sys.stderr)
                 batch_end = min(i + batch_size, len(all_images))
                 batch_images = all_images[i:batch_end]
                 batch_tensor = torch.stack(batch_images).to(device)
@@ -177,6 +179,7 @@ def process_batch(input_file, output_file, model_path, batch_size=32):
         with torch.no_grad():
             all_alt_embeddings = []
             for i in range(0, len(all_alt_texts), batch_size):
+                print(f"  [Progress] Alt-Texts: {i}/{len(all_alt_texts)}...", file=sys.stderr)
                 batch_alts = all_alt_texts[i:i + batch_size]
                 alt_tokens = open_clip.tokenize(batch_alts).to(device)
                 batch_embeddings = model.encode_text(alt_tokens)

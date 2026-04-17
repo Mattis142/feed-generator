@@ -653,7 +653,7 @@ export const handler = async (
 
         if (isLayer1) {
             const mutualBoost = isMutual ? 2.5 : 1.0
-            const l1Boost = 3000 * tierDecay * mutualBoost * (0.8 + authorAffinity * 0.2) // Scale by affinity
+            const l1Boost = 4500 * tierDecay * mutualBoost * (0.8 + authorAffinity * 0.2) // Scale by affinity
             score += l1Boost
             signals['layer1'] = Math.round(l1Boost)
             if (authorAffinity > 1.2) signals['affinity_boost'] = Math.round(l1Boost * (authorAffinity - 1) * 0.2 / (0.8 + authorAffinity * 0.2))
@@ -662,7 +662,7 @@ export const handler = async (
             score += interactedBoost
             signals['interacted'] = Math.round(interactedBoost)
         } else if (isLayer2) {
-            const l2Boost = 500 * tierDecay * (0.9 + authorAffinity * 0.1)
+            const l2Boost = 750 * tierDecay * (0.9 + authorAffinity * 0.1)
             score += l2Boost
             signals['layer2'] = Math.round(l2Boost)
         } else {

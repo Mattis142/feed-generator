@@ -5,7 +5,7 @@ import { AppContext } from '../src/config'
 import { qdrantDB } from '../src/db/qdrant'
 import { writeFile, mkdir, readFile, unlink } from 'fs/promises'
 import { join } from 'path'
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import { promisify } from 'util'
 import crypto from 'crypto'
 import { AtpAgent } from '@atproto/api'
@@ -241,11 +241,56 @@ async function run() {
                 const scriptPath = join(process.cwd(), 'scripts', 'embed_posts.py')
 
                 try {
-                    const { stdout, stderr } = await execAsync(
-                        `python3 "${scriptPath}" "${inputPath}" "${outputPath}" --model-path "${modelPath}" --batch-size 12`,
-                        { maxBuffer: 50 * 1024 * 1024 } // 50MB buffer for large outputs
-                    )
-                    if (stderr) console.log(`[Batch Pipeline] Python stderr: ${stderr.slice(0, 500)}`)
+                    console.log(`[Batch Pipeline] Starting embedding for ${richPosts.length} posts...`)
+                    const pythonProcess = spawn('python3', [
+                        scriptPath,
+                        inputPath,
+                        outputPath,
+                        '--model-path', modelPath,
+                        '--batch-size', '12'
+                    ])
+
+                    // Listen for real-time output
+                    pythonProcess.stdout.on('data', (data) => {
+                        const lines = data.toString().split('\n')
+                        for (const line of lines) {
+                            if (line.trim()) {
+                                if (line.includes('[Progress]')) {
+                                    process.stdout.write(`\r  ${line.trim()} `)
+                                } else {
+                                    console.log(`[Python Stdout] ${line.trim()}`)
+                                }
+                            }
+                        }
+                    })
+
+                    pythonProcess.stderr.on('data', (data) => {
+                        const lines = data.toString().split('\n')
+                        for (const line of lines) {
+                            if (line.trim()) {
+                                if (line.includes('[Progress]')) {
+                                    process.stdout.write(`\r  ${line.trim()} `)
+                                } else {
+                                    console.log(`[Python Stderr] ${line.trim()}`)
+                                }
+                            }
+                        }
+                    })
+
+                    // Wait for process to finish
+                    await new Promise((resolve, reject) => {
+                        pythonProcess.on('close', (code) => {
+                            if (code === 0) {
+                                console.log('\n[Batch Pipeline] Embedding completed successfully.')
+                                resolve(null)
+                            } else {
+                                reject(new Error(`Python process exited with code ${code}`))
+                            }
+                        })
+                        pythonProcess.on('error', (err) => {
+                            reject(err)
+                        })
+                    })
 
                     // Read embeddings and upsert to Qdrant
                     const embeddingsRaw = await readFile(outputPath, 'utf-8')
