@@ -346,17 +346,18 @@ async function run() {
             const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
 
             // Get liked post URIs from our local DB first (faster than API)
-            const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+            // Expanded to 30 days for better clustering with more data points
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
             const recentLikes = await db
                 .selectFrom('graph_interaction')
                 .select(['target', 'type'])
                 .where('actor', '=', userDid)
                 .where('type', 'in', ['like', 'repost'])
-                .where('indexedAt', '>', threeDaysAgo)
-                .limit(200)
+                .where('indexedAt', '>', thirtyDaysAgo)
+                .limit(500)
                 .execute()
 
-            // Also get explicit feedback interactions
+            // Also get explicit feedback interactions (7 days)
             const recentFeedback = await db
                 .selectFrom('graph_interaction')
                 .select(['target', 'type', 'weight'])
@@ -566,7 +567,7 @@ async function run() {
                 const profileScript = join(process.cwd(), 'scripts', 'build_user_profile.py')
                 try {
                     const { stdout, stderr } = await execAsync(
-                        `python3 "${profileScript}" "${profileInputPath}" "${profileOutputPath}"`,
+                        `python3 "${profileScript}" "${profileInputPath}" "${profileOutputPath}" --min-cluster-size 3`,
                         { maxBuffer: 10 * 1024 * 1024 }
                     )
                     if (stderr) console.log(`[Batch Pipeline] Profile stderr: ${stderr.slice(0, 500)}`)

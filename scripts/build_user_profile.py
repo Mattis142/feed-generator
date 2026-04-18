@@ -184,8 +184,8 @@ def main():
     parser = argparse.ArgumentParser(description='Build multi-centroid user profiles via HDBSCAN')
     parser.add_argument('input_json', help='Path to input JSON file')
     parser.add_argument('output_json', help='Path to output JSON file')
-    parser.add_argument('--min-cluster-size', type=int, default=5,
-                        help='HDBSCAN min_cluster_size (default: 5)')
+    parser.add_argument('--min-cluster-size', type=int, default=3,
+                        help='HDBSCAN min_cluster_size (default: 3)')
     args = parser.parse_args()
 
     # Read input
