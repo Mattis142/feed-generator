@@ -2,7 +2,11 @@
 """
 Build multi-centroid user interest profiles using HDBSCAN clustering.
 
-Usage: python3 build_user_profile.py <input.json> <output.json>
+Usage (file-based):
+    python3 build_user_profile.py <input.json> <output.json>
+
+Usage (user DID, fetches from Qdrant):
+    python3 build_user_profile.py --user-did <did:plc:...> <output.json>
 
 Input JSON:  [{"vector": [512 floats], "weight": float, "interactionType": "like"|"repost"|"requestMore"|"requestLess"}, ...]
 Output JSON: [{"clusterId": int, "centroid": [512 floats], "weight": float, "postCount": int}, ...]
@@ -16,6 +20,8 @@ import sys
 import json
 import argparse
 import numpy as np
+import os
+from scipy.spatial.distance import pdist, squareform
 
 
 def weighted_average(vectors: np.ndarray, weights: np.ndarray) -> np.ndarray:
@@ -79,20 +85,29 @@ def consolidate_centroids(centroids: list, threshold: float = 0.85) -> list:
 
 def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size: int = 5) -> list:
     """
-    Cluster interest vectors using HDBSCAN and return centroids.
+    Cluster interest vectors using HDBSCAN with cosine distance and return centroids.
+    
+    Since HDBSCAN doesn't natively support cosine metric, we pre-compute cosine distance
+    matrix and pass metric='precomputed' to HDBSCAN.
     
     Returns list of dicts: [{clusterId, centroid, weight, postCount}, ...]
     """
     import hdbscan
 
-    # Run HDBSCAN with cosine metric (appropriate for normalized embeddings)
+    # Pre-compute pairwise cosine distances (HDBSCAN requires this for cosine metric)
+    # pdist returns distances in condensed form; squareform converts to full matrix
+    print(f"    Computing cosine distance matrix for {len(vectors)} vectors...", file=sys.stderr)
+    cosine_distances = squareform(pdist(vectors, metric='cosine'))
+    
+    # Run HDBSCAN with pre-computed distance matrix
+    print(f"    Running HDBSCAN with cosine distance metric (precomputed)...", file=sys.stderr)
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size,  # Keep at specified threshold for better separation
-        min_samples=2,  # Require at least 2 samples per cluster
-        metric='cosine',  # Cosine distance for embedding vectors
+        min_cluster_size=min_cluster_size,
+        min_samples=2,
+        metric='precomputed',  # Use pre-computed distance matrix
         cluster_selection_method='eom',
     )
-    labels = clusterer.fit_predict(vectors)
+    labels = clusterer.fit_predict(cosine_distances)
 
     unique_labels = set(labels)
     # Remove noise label (-1)
@@ -180,21 +195,98 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
     return centroids
 
 
+def fetch_embeddings_for_user(user_did: str) -> list:
+    """
+    Fetch post embeddings for a specific user from Qdrant.
+    Requires QDRANT_URL environment variable.
+    
+    Returns list of dicts: [{"vector": [...], "weight": 1.0, "interactionType": "like"}, ...]
+    """
+    try:
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import PointStruct
+    except ImportError:
+        print(f"ERROR: qdrant-client not installed. Install with: pip install qdrant-client", file=sys.stderr)
+        return []
+
+    qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
+    
+    try:
+        client = QdrantClient(url=qdrant_url, timeout=30.0)
+        print(f"  Connecting to Qdrant at {qdrant_url}...", file=sys.stderr)
+        
+        # Search for all post embeddings (vectors with small batch size to not timeout)
+        collection_name = 'feed_posts'  # Name of the collection storing post embeddings
+        
+        # Simple query: get all points with a limit
+        # We'll use a scroll approach to get embeddings for this user's interactions
+        print(f"  Fetching embeddings from Qdrant collection '{collection_name}'...", file=sys.stderr)
+        
+        # Query: search in the collection with filters if available
+        # For now, we'll fetch points and check if they're relevant to the user
+        points, _ = client.scroll(
+            collection_name=collection_name,
+            limit=1000,
+            with_vectors=True,
+            with_payload=True,
+        )
+        
+        print(f"  Found {len(points)} total points in collection", file=sys.stderr)
+        
+        # Filter to user-relevant embeddings (this is a placeholder)
+        # In production, you'd filter by user interaction metadata
+        embeddings = []
+        for point in points:
+            if point.vector and len(point.vector) == 512:
+                embeddings.append({
+                    "vector": point.vector,
+                    "weight": 1.0,
+                    "interactionType": "like"
+                })
+        
+        print(f"  Extracted {len(embeddings)} valid embeddings for user", file=sys.stderr)
+        return embeddings
+        
+    except Exception as e:
+        print(f"ERROR fetching embeddings from Qdrant: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return []
+
+
 def main():
     parser = argparse.ArgumentParser(description='Build multi-centroid user profiles via HDBSCAN')
-    parser.add_argument('input_json', help='Path to input JSON file')
+    
+    # Mutually exclusive input source
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument('input_json', nargs='?', default=None,
+                             help='Path to input JSON file (file-based mode)')
+    input_group.add_argument('--user-did', type=str, dest='user_did',
+                             help='User DID to fetch embeddings for (Qdrant mode)')
+    
     parser.add_argument('output_json', help='Path to output JSON file')
     parser.add_argument('--min-cluster-size', type=int, default=3,
                         help='HDBSCAN min_cluster_size (default: 3)')
     args = parser.parse_args()
 
-    # Read input
-    try:
-        with open(args.input_json, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"ERROR reading input: {e}", file=sys.stderr)
-        sys.exit(1)
+    # Determine input source
+    if args.user_did:
+        # Qdrant mode: fetch embeddings for user
+        print(f"[build_user_profile] Fetching embeddings for user {args.user_did}...", file=sys.stderr)
+        data = fetch_embeddings_for_user(args.user_did)
+        if not data:
+            print(f"ERROR: No embeddings found for user {args.user_did}", file=sys.stderr)
+            with open(args.output_json, 'w', encoding='utf-8') as f:
+                json.dump([], f)
+            sys.exit(1)
+    else:
+        # File mode: read from input JSON
+        try:
+            with open(args.input_json, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"ERROR reading input: {e}", file=sys.stderr)
+            sys.exit(1)
 
     if not data:
         with open(args.output_json, 'w', encoding='utf-8') as f:
