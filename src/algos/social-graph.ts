@@ -652,8 +652,8 @@ export const handler = async (
         const authorAffinity = authorFatigueMap[post.author]?.affinityScore || 1.0
 
         if (isLayer1) {
-            const mutualBoost = isMutual ? 2.5 : 1.0
-            const l1Boost = 4500 * tierDecay * mutualBoost * (0.8 + authorAffinity * 0.2) // Scale by affinity
+            const mutualBoost = isMutual ? 3.2 : 1.5  // Increased from 2.5 and 1.0
+            const l1Boost = 8500 * tierDecay * mutualBoost * (0.8 + authorAffinity * 0.2) // Increased from 4500
             score += l1Boost
             signals['layer1'] = Math.round(l1Boost)
             if (authorAffinity > 1.2) signals['affinity_boost'] = Math.round(l1Boost * (authorAffinity - 1) * 0.2 / (0.8 + authorAffinity * 0.2))
@@ -662,7 +662,7 @@ export const handler = async (
             score += interactedBoost
             signals['interacted'] = Math.round(interactedBoost)
         } else if (isLayer2) {
-            const l2Boost = 750 * tierDecay * (0.9 + authorAffinity * 0.1)
+            const l2Boost = 2200 * tierDecay * (0.9 + authorAffinity * 0.1)  // Increased from 750
             score += l2Boost
             signals['layer2'] = Math.round(l2Boost)
         } else {
