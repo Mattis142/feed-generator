@@ -31,6 +31,9 @@ const execAsync = promisify(exec)
 async function run() {
     dotenv.config()
 
+    // Check for command-line argument to process single user
+    const singleUserDid = process.argv[2] ?? null
+
     const postgresConnectionString = process.env.POSTGRES_CONNECTION_STRING ?? 'postgresql://bsky:bskypassword@localhost:5432/repo'
     const db = createDb(postgresConnectionString)
     await migrateToLatest(db)
@@ -82,7 +85,11 @@ async function run() {
 
     // Get active users (whitelisted users)
     let activeUsers: string[] = []
-    if (whitelist.length > 0) {
+    if (singleUserDid) {
+        // Process single user if provided as command-line argument
+        activeUsers = [singleUserDid]
+        console.log(`[Batch Pipeline] Processing single user: ${singleUserDid}`)
+    } else if (whitelist.length > 0) {
         activeUsers = whitelist
     } else {
         // Fallback: get users who have been served posts recently
