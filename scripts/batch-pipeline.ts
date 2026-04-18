@@ -345,26 +345,23 @@ async function run() {
             const repoAgent = new AtpAgent({ service: 'https://bsky.social' })
             const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
 
-            // Get liked post URIs from our local DB first (faster than API)
-            // Expanded to 30 days for better clustering with more data points
-            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+            // Get ALL liked post URIs from our local DB (no time limit) for clustering
+            // We need enough data points for HDBSCAN to actually cluster
             const recentLikes = await db
                 .selectFrom('graph_interaction')
                 .select(['target', 'type'])
                 .where('actor', '=', userDid)
                 .where('type', 'in', ['like', 'repost'])
-                .where('indexedAt', '>', thirtyDaysAgo)
-                .limit(500)
+                .limit(1000)  // Get up to 1000 likes for profile clustering
                 .execute()
 
-            // Also get explicit feedback interactions (7 days)
+            // Also get explicit feedback interactions (from all time)
             const recentFeedback = await db
                 .selectFrom('graph_interaction')
                 .select(['target', 'type', 'weight'])
                 .where('actor', '=', userDid)
                 .where('type', 'in', ['requestMore', 'requestLess'] as any[])
-                .where('indexedAt', '>', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-                .limit(100)
+                .limit(200)
                 .execute()
 
             // Retrieve embeddings for liked posts from Qdrant
