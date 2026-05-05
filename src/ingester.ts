@@ -148,9 +148,9 @@ async function deletePostsBatched(db: any, cutoff: string, maxLikes: number, max
                     .where('likeCount', '<=', maxLikes)
                     .where('repostCount', '<=', maxReposts)
                     // Never prune posts that are currently in an active semantic batch for ANY user
-                    .where('uri', 'not in', (eb: any) =>
-                        eb.selectFrom('user_candidate_batch').select('uri')
-                    )
+                    .where(eb.not(eb.exists(
+                        eb.selectFrom('user_candidate_batch').select('uri').whereRef('user_candidate_batch.uri', '=', 'post.uri')
+                    )))
                     .limit(batchSize)
             )
             .executeTakeFirst()
@@ -176,9 +176,9 @@ async function deletePostsBatchedAll(db: any, cutoff: string, batchSize: number)
                     .select('uri')
                     .where('indexedAt', '<', cutoff)
                     // Never prune posts that are currently in an active semantic batch for ANY user
-                    .where('uri', 'not in', (eb: any) =>
-                        eb.selectFrom('user_candidate_batch').select('uri')
-                    )
+                    .where(eb.not(eb.exists(
+                        eb.selectFrom('user_candidate_batch').select('uri').whereRef('user_candidate_batch.uri', '=', 'post.uri')
+                    )))
                     .limit(batchSize)
             )
             .executeTakeFirst()
