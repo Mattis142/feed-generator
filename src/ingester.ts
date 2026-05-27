@@ -59,13 +59,20 @@ const run = async () => {
         }
     }
 
-    // Start background database pruning (every 24 hours to reduce contention)
-    setInterval(() => cleanupDatabase(db), 24 * 60 * 60 * 1000)
+    // Run cleanup every 6 hours (was 24h — the original interval let graph_interaction
+    // grow unbounded and caused the disk-full crash on 2026-05-20)
+    setInterval(() => cleanupDatabase(db), 6 * 60 * 60 * 1000)
     // Refresh graph followers every 15 mins
     setInterval(() => refreshTrackedDids(), 15 * 60 * 1000)
 
     // Run graph refresh on startup
     setTimeout(() => refreshTrackedDids(), 5000)
+    // Run initial cleanup 2 minutes after startup so the DB is settled
+    setTimeout(() => cleanupDatabase(db), 2 * 60 * 1000)
+
+    // Disk-space watchdog: check every hour, trigger emergency cleanup if > 80% used.
+    // This is a last-resort safety valve against a repeat of the 2026-05-20 disk-full incident.
+    setInterval(() => diskSpaceWatchdog(db), 60 * 60 * 1000)
 
     logger.info('Ingester running and subscribed to global firehose.')
 }
@@ -87,6 +94,19 @@ async function cleanupDatabase(db: any) {
         await db.deleteFrom('user_seen_post')
             .where('seenAt', '<', sevenDaysAgo)
             .execute()
+
+        // --- Prune graph_interaction ---
+        // ROOT CAUSE OF 2026-05-20 DISK FULL: this table had NO pruning and grew to 24 GB / 50M rows.
+        // graph_interaction stores likes/reposts/replies. We only need recent signal for the algorithm.
+        // Keep 90 days — anything older is stale and irrelevant for feed ranking.
+        const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
+        const deletedInteractions = await db.deleteFrom('graph_interaction')
+            .where('indexedAt', '<', ninetyDaysAgo)
+            .executeTakeFirst()
+        const interactionCount = Number(deletedInteractions?.numDeletedRows ?? 0)
+        if (interactionCount > 0) {
+            logger.info(`Pruned ${interactionCount} old graph_interaction rows (>90 days)`)
+        }
 
         // --- Tiered post pruning (batched to prevent deadlocks with concurrent inserts) ---
         // We use DELETE WHERE uri IN (SELECT uri ... LIMIT N) so only a fixed number
@@ -130,6 +150,30 @@ async function cleanupDatabase(db: any) {
         logger.info(`Cleanup complete. Pruned posts: ${totalDeleted} (t1:${tier1}, t2:${tier2}, t3:${tier3})`)
     } catch (err) {
         logger.error('Failed during Postgres background cleanup:', err)
+    }
+}
+
+/**
+ * Disk-space watchdog. Reads /proc/mounts or falls back to df to check how full
+ * the root filesystem is. If usage exceeds 80%, triggers an immediate cleanup cycle
+ * and logs a warning. This is a last-resort safety valve to prevent the server from
+ * going completely full (which kills Postgres and requires manual intervention).
+ */
+async function diskSpaceWatchdog(db: any) {
+    try {
+        const { execSync } = await import('child_process')
+        // df -P / gives a portable one-line output: Filesystem Blocks Used Available Use% Mounted
+        const output = execSync("df -P / | awk 'NR==2{print $5}'").toString().trim()
+        const usagePct = parseInt(output.replace('%', ''), 10)
+        if (isNaN(usagePct)) return
+
+        logger.info(`Disk usage: ${usagePct}%`)
+        if (usagePct >= 80) {
+            logger.warn(`⚠️  Disk usage is ${usagePct}% — triggering emergency cleanup to prevent disk-full crash!`)
+            await cleanupDatabase(db)
+        }
+    } catch (err) {
+        logger.error('diskSpaceWatchdog failed:', err)
     }
 }
 
