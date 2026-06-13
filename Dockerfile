@@ -14,11 +14,12 @@ WORKDIR /app
 COPY package.json yarn.lock* package-lock.json* ./
 RUN yarn install
 
+# Copy Python requirements and install them
+COPY scripts/requirements.txt ./scripts/
+RUN pip3 install --no-cache-dir -r scripts/requirements.txt --break-system-packages
+
 # Copy the rest of the application
 COPY . .
-
-# Install Python dependencies
-RUN pip3 install --no-cache-dir -r scripts/requirements.txt --break-system-packages
 
 EXPOSE 3000
 
