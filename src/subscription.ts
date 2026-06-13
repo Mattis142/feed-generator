@@ -207,7 +207,12 @@ export class JetstreamSubscription {
         const replyRoot = record.reply?.root?.uri || null
         const replyParent = record.reply?.parent?.uri || null
         // PostgreSQL strictly rejects \u0000 (null bytes) in strings, which Bluesky permits
-        const text = typeof record.text === 'string' ? record.text.replace(/\u0000/g, '') : null
+        let text: string | null = null
+        if (typeof record.text === 'string') {
+          text = record.text.replace(/\u0000/g, '')
+        } else if (record.text !== undefined && record.text !== null) {
+          logger.warn(`Encountered post record with non-string text field. DID: ${did}, URI: ${uri}, Type: ${typeof record.text}, Value:`, record.text)
+        }
 
         // Extract media flags
         const embed = record.embed
