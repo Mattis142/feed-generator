@@ -207,7 +207,7 @@ export class JetstreamSubscription {
         const replyRoot = record.reply?.root?.uri || null
         const replyParent = record.reply?.parent?.uri || null
         // PostgreSQL strictly rejects \u0000 (null bytes) in strings, which Bluesky permits
-        const text = record.text?.replace(/\u0000/g, '') || null
+        const text = typeof record.text === 'string' ? record.text.replace(/\u0000/g, '') : null
 
         // Extract media flags
         const embed = record.embed
