@@ -52,19 +52,22 @@ export default function (server: Server, ctx: AppContext) {
               if (feedbackInteractions.length > 0) {
                 const { handleInteractionFeedback } = await import('../algos/social-graph')
                 
-                // Hard-filter: Insert 'hide' interactions for requestLess
-                const hides = feedbackInteractions
-                  .filter((i: any) => i.event === 'app.bsky.feed.defs#requestLess')
+                // Hard-filter and Like tracking: Insert explicit interactions into graph
+                const explicitGraphInserts = feedbackInteractions
+                  .filter((i: any) => i.event === 'app.bsky.feed.defs#requestLess' || i.event === 'app.bsky.feed.defs#interactionLike')
                   .map((i: any) => ({
                     actor: userDid,
                     target: i.item,
-                    type: 'hide' as any,
+                    type: (i.event === 'app.bsky.feed.defs#requestLess' ? 'hide' : 'like') as any,
                     weight: 1,
                     indexedAt: now
                   }))
                   
-                if (hides.length > 0) {
-                  await ctx.db.insertInto('graph_interaction').values(hides).execute().catch(e => logger.error('[Interactions] Failed to insert hide', e))
+                if (explicitGraphInserts.length > 0) {
+                  await ctx.db.insertInto('graph_interaction')
+                    .values(explicitGraphInserts)
+                    .execute()
+                    .catch(e => logger.error('[Interactions] Failed to insert explicit graph interactions', e))
                 }
 
                 for (const interaction of feedbackInteractions) {
