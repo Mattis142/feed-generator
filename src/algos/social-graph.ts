@@ -206,12 +206,12 @@ export const handler = async (
         .where('seenAt', '>', fatigueLookback)
         .execute()
 
-    // Fetch posts the user has already interacted with (likes, reposts, replies)
+    // Fetch posts the user has already interacted with (likes, reposts, replies, hides)
     const userInteractions = await ctx.db
         .selectFrom('graph_interaction')
         .select(['target', 'type'])
         .where('actor', '=', requesterDid)
-        .where('type', 'in', ['like', 'repost', 'reply'])
+        .where('type', 'in', ['like', 'repost', 'reply', 'hide'] as any)
         .execute()
 
     const seenCountMap: Record<string, number> = {}
@@ -1001,10 +1001,10 @@ export const handler = async (
 
     // Filter and Dedup with Advanced Reply Logic
     const filtered = scoredPosts.filter(sp => {
-        // HARD FILTER: Completely remove posts the user has already liked
+        // HARD FILTER: Completely remove posts the user has already liked or explicitly hidden
         const userInteraction = userInteractionMap[sp.post.uri]
-        if (userInteraction === 'like') {
-            return false // Never show liked posts again
+        if (userInteraction === 'like' || userInteraction === 'hide') {
+            return false // Never show liked or hidden posts again
         }
 
         // HARD FILTER: Completely remove posts that have been seen 3+ times
@@ -1504,9 +1504,19 @@ export async function handleInteractionFeedback(
 
     // 3. Adjust Keyword Scores (-1.0 to 1.0 range)
     if (post.text) {
-        const words = post.text.toLowerCase().split(/\s+/).filter(w => w.length > 4)
+        // BUGFIX: For negative feedback, only penalize hashtags. Otherwise we penalize the entire English dictionary!
+        let words: string[] = []
+        if (type === 'more') {
+            words = post.text.toLowerCase().split(/\s+/).filter(w => w.length > 4 && !w.startsWith('#'))
+        } else {
+            const hashtags = post.text.toLowerCase().match(/#\w+/g) || []
+            words = hashtags.map(h => h.substring(1)) // Remove the '#'
+        }
+        
         const adjustment = type === 'more' ? keywordAdj : -keywordAdj
-        console.log(`[Feedback] Adjusting ${words.length} keywords by ${adjustment}`)
+        if (words.length > 0) {
+            console.log(`[Feedback] Adjusting ${words.length} keywords by ${adjustment}`)
+        }
 
         const restrictedKeywords = new Set(['adult', 'porn', 'nsfw', 'pornography', 'xxx', 'hentai', 'furry'])
 

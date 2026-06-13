@@ -46,11 +46,27 @@ export default function (server: Server, ctx: AppContext) {
 
               // Explicit feedback
               const feedbackInteractions = interactions.filter((interaction: any) =>
-                ['app.bsky.feed.defs#interactionLike', 'app.bsky.feed.defs#interactionDislike', 'app.bsky.feed.defs#requestLess', 'app.bsky.feed.defs#requestMore'].includes(interaction.event)
+                ['app.bsky.feed.defs#interactionLike', 'app.bsky.feed.defs#requestLess', 'app.bsky.feed.defs#requestMore'].includes(interaction.event)
               )
 
               if (feedbackInteractions.length > 0) {
                 const { handleInteractionFeedback } = await import('../algos/social-graph')
+                
+                // Hard-filter: Insert 'hide' interactions for requestLess
+                const hides = feedbackInteractions
+                  .filter((i: any) => i.event === 'app.bsky.feed.defs#requestLess')
+                  .map((i: any) => ({
+                    actor: userDid,
+                    target: i.item,
+                    type: 'hide' as any,
+                    weight: 1,
+                    indexedAt: now
+                  }))
+                  
+                if (hides.length > 0) {
+                  await ctx.db.insertInto('graph_interaction').values(hides).execute().catch(e => logger.error('[Interactions] Failed to insert hide', e))
+                }
+
                 for (const interaction of feedbackInteractions) {
                   const isPositive = interaction.event === 'app.bsky.feed.defs#interactionLike' || interaction.event === 'app.bsky.feed.defs#requestMore'
                   const strength = interaction.event.includes('request') ? 'strong' : 'weak'
