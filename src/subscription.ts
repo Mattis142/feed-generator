@@ -2,7 +2,7 @@ import { Database } from './db'
 import WebSocket from 'ws'
 import { updateTasteSimilarity } from './algos/taste-similarity'
 import { updateAuthorFatigueOnInteraction } from './algos/social-graph'
-import { logger } from './logger'
+import { logger, notifyTelegram } from './logger'
 
 export type JetstreamConfig = {
   wantedCollections: string[]
@@ -212,6 +212,9 @@ export class JetstreamSubscription {
           text = record.text.replace(/\u0000/g, '')
         } else if (record.text !== undefined && record.text !== null) {
           logger.warn(`Encountered post record with non-string text field. DID: ${did}, URI: ${uri}, Type: ${typeof record.text}, Value:`, record.text)
+          const hostname = process.env.FEEDGEN_HOSTNAME || 'unknown-host'
+          const telegramMessage = `⚠️ *Warning on ${hostname}*\n\nEncountered post record with non-string text field.\n*DID:* \`${did}\`\n*URI:* \`${uri}\`\n*Type:* \`${typeof record.text}\`\n*Value:* \`${JSON.stringify(record.text).slice(0, 1000)}\``
+          notifyTelegram(telegramMessage).catch(console.error)
         }
 
         // Extract media flags

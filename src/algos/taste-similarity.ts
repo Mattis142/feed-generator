@@ -42,8 +42,8 @@ export async function updateTasteSimilarity(
         .onConflict((oc) => oc
           .columns(['userDid', 'similarUserDid'])
           .doUpdateSet({
-            agreementCount: (eb) => eb('agreementCount', '+', 1),
-            totalCoLikedPosts: (eb) => eb('totalCoLikedPosts', '+', 1),
+            agreementCount: (eb) => eb('taste_similarity.agreementCount', '+', 1),
+            totalCoLikedPosts: (eb) => eb('taste_similarity.totalCoLikedPosts', '+', 1),
             lastAgreementAt: now,
             updatedAt: now
           })
