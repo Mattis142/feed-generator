@@ -158,12 +158,12 @@ async function serveFromBatchesOrFallback(
   console.log(`[Semantic Serve Debug] Raw batchRows: ${batchRows.length}, Unique deduplicated: ${Object.values(uniqueBatchRowsMap).length}, Decayed: ${decayed.length}`)
   // --- Real-time filters ---
 
-  // 1. Filter already-liked posts
+  // 1. Filter already-liked and hidden posts
   const likedPosts = await ctx.db
     .selectFrom('graph_interaction')
     .select('target')
     .where('actor', '=', requesterDid)
-    .where('type', 'in', ['like', 'repost', 'reply'])
+    .where('type', 'in', ['like', 'repost', 'reply', 'hide'] as any)
     .execute()
   const likedUris = new Set(likedPosts.map(r => r.target))
 
@@ -243,8 +243,11 @@ async function serveFromBatchesOrFallback(
     // Relaxed filter: Allow fatigued posts to pass so they sink to the bottom, keeping batch populated
     .filter(c => c.adjustedScore > -2000)
 
-  // Sort by adjusted score
-  filtered.sort((a, b) => b.adjustedScore - a.adjustedScore)
+  // Sort by adjusted score DESC, then URI DESC to ensure stable cursor pagination
+  filtered.sort((a, b) => {
+    if (b.adjustedScore !== a.adjustedScore) return b.adjustedScore - a.adjustedScore;
+    return b.uri.localeCompare(a.uri);
+  })
 
   // --- Account diversity: prevent same author from dominating ---
   const diversified: typeof filtered = []
@@ -321,9 +324,12 @@ async function serveFromBatchesOrFallback(
         fatiguePenalty: 0,
       }))
 
-    // Merge and re-sort
+    // Merge and re-sort with tie-breaker
     // @ts-ignore
-    finalResults = [...diversified, ...liveItems].sort((a, b) => b.adjustedScore - a.adjustedScore)
+    finalResults = [...diversified, ...liveItems].sort((a, b) => {
+      if (b.adjustedScore !== a.adjustedScore) return b.adjustedScore - a.adjustedScore;
+      return b.uri.localeCompare(a.uri);
+    })
     console.log(`[Semantic Serve] Interspliced ${liveItems.length} live posts. Total: ${finalResults.length}`)
   }
 
