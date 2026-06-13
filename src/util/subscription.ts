@@ -12,6 +12,7 @@ import {
   isCommit,
 } from '../lexicon/types/com/atproto/sync/subscribeRepos'
 import { Database } from '../db'
+import { logger } from '../logger'
 
 export abstract class FirehoseSubscriptionBase {
   public sub: Subscription<RepoEvent>
@@ -28,7 +29,7 @@ export abstract class FirehoseSubscriptionBase {
             value,
           )
         } catch (err) {
-          console.error('repo subscription skipped invalid message', err)
+          logger.error('repo subscription skipped invalid message', err)
         }
       },
     })
@@ -40,7 +41,7 @@ export abstract class FirehoseSubscriptionBase {
     try {
       for await (const evt of this.sub) {
         this.handleEvent(evt).catch((err) => {
-          console.error('repo subscription could not handle message', err)
+          logger.error('repo subscription could not handle message', err)
         })
         // update stored cursor every 20 events or so
         if (isCommit(evt) && evt.seq % 20 === 0) {
@@ -48,7 +49,7 @@ export abstract class FirehoseSubscriptionBase {
         }
       }
     } catch (err) {
-      console.error('repo subscription errored', err)
+      logger.error('repo subscription errored', err)
       setTimeout(
         () => this.run(subscriptionReconnectDelay),
         subscriptionReconnectDelay,
