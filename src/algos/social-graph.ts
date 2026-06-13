@@ -227,12 +227,12 @@ export const handler = async (
         userInteractionMap[ui.target] = ui.type
     })
 
-    // 2.0. Taste Similarity Analysis - Find users with similar tastes (Increased to 100 for better discovery)
-    const tasteSimilarUsers = await getTasteSimilarUsers(ctx, requesterDid, 100)
+    // 2.0. Taste Similarity Analysis - Find users with similar tastes (Increased to 100 for batch, 20 for live to prevent timeout)
+    const tasteSimilarUsers = await getTasteSimilarUsers(ctx, requesterDid, batchMode ? 100 : 20)
     console.log(`[Taste Similarity] Found ${tasteSimilarUsers.length} taste-similar users`)
 
-    // Get posts liked by taste-similar users in the last 72 hours
-    const tasteSimilarPosts = await getPostsLikedBySimilarUsers(ctx, requesterDid, tasteSimilarUsers, 72)
+    // Get posts liked by taste-similar users in the last 72 hours (24h for live)
+    const tasteSimilarPosts = await getPostsLikedBySimilarUsers(ctx, requesterDid, tasteSimilarUsers, batchMode ? 72 : 24)
     const tasteSimilarPostMap = new Map<string, { boostScore: number; similarUserDids: string[] }>()
     tasteSimilarPosts.forEach(tsp => {
         tasteSimilarPostMap.set(tsp.postUri, {
@@ -1512,7 +1512,7 @@ export async function handleInteractionFeedback(
             const hashtags = post.text.toLowerCase().match(/#\w+/g) || []
             words = hashtags.map(h => h.substring(1)) // Remove the '#'
         }
-        
+
         const adjustment = type === 'more' ? keywordAdj : -keywordAdj
         if (words.length > 0) {
             console.log(`[Feedback] Adjusting ${words.length} keywords by ${adjustment}`)
