@@ -2,6 +2,7 @@ import { Server } from '../lexicon'
 import { AppContext } from '../config'
 import { InputSchema } from '../lexicon/types/app/bsky/feed/sendInteractions'
 import { validateAuth } from '../auth'
+import { logger } from '../logger'
 
 export default function (server: Server, ctx: AppContext) {
   server.app.bsky.feed.sendInteractions(async ({ input, req }) => {
@@ -57,13 +58,13 @@ export default function (server: Server, ctx: AppContext) {
                 }
               }
             } catch (err) {
-              console.error('[Interactions] Background processing failed:', err)
+              logger.error('[Interactions] Background processing failed:', err)
             }
           }
           processBackgroundInteractions() // No await: immediate return
 
         } catch (error) {
-          console.error('[Interactions] Failed to store seen interactions:', error)
+          logger.error('[Interactions] Failed to store seen interactions:', error)
         }
       }
     }

@@ -271,7 +271,7 @@ export class JetstreamSubscription {
               await updateTasteSimilarity(ctx, did, subjectUri, 'like')
             }
           } catch (err) {
-            console.error('[Taste Similarity] Failed to update taste similarity:', err)
+            logger.error('[Taste Similarity] Failed to update taste similarity:', err)
           }
 
           // Update author fatigue for like interactions
@@ -282,7 +282,7 @@ export class JetstreamSubscription {
               await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'like')
             }
           } catch (err) {
-            console.error('[Author Fatigue] Failed to update fatigue for like:', err)
+            logger.error('[Author Fatigue] Failed to update fatigue for like:', err)
           }
         }
       }
@@ -312,7 +312,7 @@ export class JetstreamSubscription {
               await updateAuthorFatigueOnInteraction(ctx, did, subjectUri, 'repost')
             }
           } catch (err) {
-            console.error('[Author Fatigue] Failed to update fatigue for repost:', err)
+            logger.error('[Author Fatigue] Failed to update fatigue for repost:', err)
           }
         }
       }
@@ -339,7 +339,7 @@ export class JetstreamSubscription {
             await updateAuthorFatigueOnInteraction(ctx, did, replyParent, 'reply')
           }
         } catch (err) {
-          console.error('[Author Fatigue] Failed to update fatigue for reply:', err)
+          logger.error('[Author Fatigue] Failed to update fatigue for reply:', err)
         }
       }
     }

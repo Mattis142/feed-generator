@@ -2,6 +2,7 @@ import { QueryParams } from '../lexicon/types/app/bsky/feed/getFeedSkeleton'
 import { AppContext } from '../config'
 import { Database } from '../db'
 import { getTasteSimilarUsers, getPostsLikedBySimilarUsers, updateTasteReputation } from './taste-similarity'
+import { logger } from '../logger'
 
 // Account diversity function to prevent same author from appearing consecutively
 function applyAccountDiversity(posts: Array<{ post: any; score: number; signals?: any; repostUri?: string }>): Array<{ post: any; score: number; signals?: any; repostUri?: string }> {
@@ -1197,7 +1198,7 @@ export const handler = async (
         //     .insertInto('feed_debug_log')
         //     .values(debugEntries)
         //     .execute()
-        //     .catch(err => console.error(`[Debug Log Error] ${err}`))
+        //     .catch(err => logger.error(`[Debug Log Error] ${err}`))
     }
 
     const feed = page.map((p) => {

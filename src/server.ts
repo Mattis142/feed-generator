@@ -147,7 +147,7 @@ export class FeedGenerator {
 
     // Cleanup debug logs (every 5 minutes)
     this.cleanupDebugLogs().catch(err => {
-      console.error('Initial cleanupDebugLogs failed', err)
+      logger.error('Initial cleanupDebugLogs failed', err)
     })
     setInterval(() => {
       this.cleanupDebugLogs().catch(err => {
@@ -171,7 +171,7 @@ export class FeedGenerator {
         await graphBuilder.getWantedDids(userDid)
       }
     } catch (err) {
-      console.error('Failed to refresh user graphs', err)
+      logger.error('Failed to refresh user graphs', err)
     }
   }
 
@@ -193,11 +193,11 @@ export class FeedGenerator {
         if (code === 0) {
           console.log('Daily keywords extraction completed successfully')
         } else {
-          console.error(`Daily keywords extraction exited with code ${code}`)
+          logger.error(`Daily keywords extraction exited with code ${code}`)
         }
       })
     } catch (err) {
-      console.error('Failed to run daily keywords job', err)
+      logger.error('Failed to run daily keywords job', err)
     }
   }
 
@@ -207,7 +207,7 @@ export class FeedGenerator {
       await cleanupOldTasteData({ db: this.db }, 90) // Keep 90 days of data
       logger.info('Taste similarity data cleanup completed')
     } catch (err) {
-      console.error('Failed to cleanup taste data', err)
+      logger.error('Failed to cleanup taste data', err)
     }
   }
 
@@ -244,12 +244,12 @@ export class FeedGenerator {
         if (code === 0) {
           console.log('Semantic batch pipeline completed successfully')
         } else {
-          console.error(`Semantic batch pipeline exited with code ${code}`)
+          logger.error(`Semantic batch pipeline exited with code ${code}`)
         }
       })
     } catch (err) {
       this.isPipelineRunning = false
-      console.error('Failed to run batch pipeline', err)
+      logger.error('Failed to run batch pipeline', err)
     }
   }
 
@@ -298,13 +298,13 @@ export class FeedGenerator {
               })
               console.log(`[Batch Cleanup] Removed ${orphanedUris.length} orphaned Qdrant points`)
             } catch (err) {
-              console.error('[Batch Cleanup] Failed to cleanup Qdrant points:', err)
+              logger.error('[Batch Cleanup] Failed to cleanup Qdrant points:', err)
             }
           }
         }
       }
     } catch (err) {
-      console.error('Failed to cleanup expired batches', err)
+      logger.error('Failed to cleanup expired batches', err)
     }
   }
 
@@ -321,7 +321,7 @@ export class FeedGenerator {
     //     console.log(`[Debug Cleanup] Removed ${deleted.numDeletedRows} old debug log entries`)
     //   }
     // } catch (err) {
-    //   console.error('Failed to cleanup debug logs', err)
+    //   logger.error('Failed to cleanup debug logs', err)
     // }
   }
 }

@@ -1,6 +1,7 @@
 import { AppContext } from '../config'
 import { Database } from '../db'
 import { AtpAgent } from '@atproto/api'
+import { logger } from '../logger'
 
 const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
 
@@ -54,7 +55,7 @@ export async function updateTasteSimilarity(
         // Record was updated by another process, which is fine
         console.log(`[Taste Similarity] Race condition handled for ${userDid.slice(0, 10)} and ${similarUserDid.slice(0, 10)}`)
       } else {
-        console.error(`[Taste Similarity] Error updating similarity for ${userDid.slice(0, 10)}:`, err)
+        logger.error(`[Taste Similarity] Error updating similarity for ${userDid.slice(0, 10)}:`, err)
       }
     }
 
@@ -83,7 +84,7 @@ export async function updateTasteSimilarity(
     }
   } catch (err) {
     // Silently fail API discovery if rate limited or network error
-    console.error(`[Taste Discovery] API discovery failed for ${postUri.slice(-10)}`)
+    logger.error(`[Taste Discovery] API discovery failed for ${postUri.slice(-10)}`)
   }
 }
 

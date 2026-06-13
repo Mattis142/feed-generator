@@ -1,4 +1,5 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { logger } from '../logger'
 
 export class QdrantDatabase {
   private client: QdrantClient;
@@ -16,7 +17,7 @@ export class QdrantDatabase {
       console.log('Connected to Qdrant successfully');
       console.log('Existing collections:', collections.collections.map(c => c.name));
     } catch (error) {
-      console.error('Failed to connect to Qdrant:', error);
+      logger.error('Failed to connect to Qdrant:', error);
       throw error;
     }
   }
@@ -105,7 +106,7 @@ export class QdrantDatabase {
       });
       console.log(`Collection '${name}' created successfully`);
     } catch (error) {
-      console.error(`Failed to create collection '${name}':`, error);
+      logger.error(`Failed to create collection '${name}':`, error);
       throw error;
     }
   }
@@ -118,7 +119,7 @@ export class QdrantDatabase {
         console.log(`- ${collection.name}`);
       });
     } catch (error) {
-      console.error('Failed to list collections:', error);
+      logger.error('Failed to list collections:', error);
       throw error;
     }
   }

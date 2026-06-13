@@ -1,5 +1,6 @@
 import { BskyAgent } from '@atproto/api'
 import { Database } from '../db'
+import { logger } from '../logger'
 
 export class GraphBuilder {
     public db: Database
@@ -38,7 +39,7 @@ export class GraphBuilder {
             } while (cursor)
             console.log(`[GraphBuilder] Found ${follows.length} direct follows (Layer 1) for ${userDid}`)
         } catch (e) {
-            console.error(`[GraphBuilder] Failed to fetch follows for ${userDid}`, e)
+            logger.error(`[GraphBuilder] Failed to fetch follows for ${userDid}`, e)
         }
 
         // Store Layer 1
@@ -121,7 +122,7 @@ export class GraphBuilder {
             console.log(`[GraphBuilder] Found ${likerDids.length} likers for ${postUri}`)
             return likerDids
         } catch (e) {
-            console.error(`[GraphBuilder] Failed to fetch likers for ${postUri}`, e)
+            logger.error(`[GraphBuilder] Failed to fetch likers for ${postUri}`, e)
             return []
         }
     }

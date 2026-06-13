@@ -6,6 +6,7 @@ import { validateAuth } from '../auth'
 import { AtUri } from '@atproto/syntax'
 import { GraphBuilder } from '../services/graph-builder'
 import { updateAuthorFatigueOnServe } from '../algos/social-graph'
+import { logger } from '../logger'
 
 export default function (server: Server, ctx: AppContext) {
   server.app.bsky.feed.getFeedSkeleton(async ({ params, req }) => {
@@ -43,7 +44,7 @@ export default function (server: Server, ctx: AppContext) {
       // Trigger background graph build
       const graphBuilder = new GraphBuilder(ctx.db)
       graphBuilder.buildUserGraph(requesterDid).catch((err) => {
-        console.error(`Background graph build failed for ${requesterDid}`, err)
+        logger.error(`Background graph build failed for ${requesterDid}`, err)
       })
 
       // --- Semantic Batch Serve Mode ---
@@ -62,7 +63,7 @@ export default function (server: Server, ctx: AppContext) {
             servedAt: new Date().toISOString(),
           })))
           .execute()
-          .catch(err => console.error('Failed to record served posts', err))
+          .catch(err => logger.error('Failed to record served posts', err))
 
         // Record author-level fatigue tracking (background)
         servedUris.forEach(async (uri) => {
@@ -73,7 +74,7 @@ export default function (server: Server, ctx: AppContext) {
               await updateAuthorFatigueOnServe(ctx, requesterDid, authorDid, uri)
             }
           } catch (err) {
-            console.error('Failed to update author fatigue on serve:', err)
+            logger.error('Failed to update author fatigue on serve:', err)
           }
         })
       }
@@ -84,7 +85,7 @@ export default function (server: Server, ctx: AppContext) {
         body: body,
       }
     } catch (err) {
-      console.error(`Error in getFeedSkeleton for ${params.feed}:`, err)
+      logger.error(`Error in getFeedSkeleton for ${params.feed}:`, err)
       throw err
     }
   })
@@ -391,7 +392,7 @@ async function serveFromBatchesOrFallback(
       .insertInto('feed_debug_log')
       .values(debugEntries)
       .execute()
-      .catch(err => console.error(`[Semantic Debug Log Error] ${err}`))
+      .catch(err => logger.error(`[Semantic Debug Log Error] ${err}`))
   }
 
   const last = page[page.length - 1]
