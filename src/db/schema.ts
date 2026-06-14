@@ -45,7 +45,7 @@ export type GraphFollow = {
 export type GraphInteraction = {
   actor: string
   target: string
-  type: 'like' | 'repost' | 'reply'
+  type: 'like' | 'repost' | 'reply' | 'hide' | 'requestMore'
   weight: number
   indexedAt: string
   interactionUri?: string

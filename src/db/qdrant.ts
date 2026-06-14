@@ -58,7 +58,7 @@ export class QdrantDatabase {
       });
       await this.client.createPayloadIndex('feed_post_embeddings', {
         field_name: 'indexedAt',
-        field_schema: 'keyword',
+        field_schema: 'datetime',
       });
       await this.client.createPayloadIndex('feed_post_embeddings', {
         field_name: 'likeCount',

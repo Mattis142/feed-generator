@@ -369,12 +369,11 @@ async function run() {
                 .limit(1000)  // Get up to 1000 likes for profile clustering
                 .execute()
 
-            // Also get explicit feedback interactions (from all time)
             const recentFeedback = await db
                 .selectFrom('graph_interaction')
                 .select(['target', 'type', 'weight'])
                 .where('actor', '=', userDid)
-                .where('type', 'in', ['requestMore', 'requestLess'] as any[])
+                .where('type', 'in', ['hide', 'requestMore'] as any[])
                 .limit(200)
                 .execute()
 

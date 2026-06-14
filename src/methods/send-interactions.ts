@@ -54,11 +54,19 @@ export default function (server: Server, ctx: AppContext) {
                 
                 // Hard-filter and Like tracking: Insert explicit interactions into graph
                 const explicitGraphInserts = feedbackInteractions
-                  .filter((i: any) => i.event === 'app.bsky.feed.defs#requestLess' || i.event === 'app.bsky.feed.defs#interactionLike')
+                  .filter((i: any) =>
+                    i.event === 'app.bsky.feed.defs#requestLess' ||
+                    i.event === 'app.bsky.feed.defs#interactionLike' ||
+                    i.event === 'app.bsky.feed.defs#requestMore'
+                  )
                   .map((i: any) => ({
                     actor: userDid,
                     target: i.item,
-                    type: (i.event === 'app.bsky.feed.defs#requestLess' ? 'hide' : 'like') as any,
+                    type: (i.event === 'app.bsky.feed.defs#requestLess'
+                      ? 'hide'
+                      : i.event === 'app.bsky.feed.defs#requestMore'
+                        ? 'requestMore'
+                        : 'like') as any,
                     weight: 1,
                     indexedAt: now
                   }))
