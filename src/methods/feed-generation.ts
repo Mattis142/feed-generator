@@ -339,11 +339,7 @@ async function serveFromBatchesOrFallback(
     console.log(`[Semantic Serve] Interspliced ${liveItems.length} live posts. Total: ${finalResults.length}`)
   }
 
-  // --- Fallback if all else fails ---
-  if (finalResults.length === 0) {
-    console.log(`[Semantic Serve] All sources exhausted, falling back to pure live pipeline`)
-    return algo(ctx, params, requesterDid)
-  }
+  // Fallback will be evaluated after pagination
 
   // --- Pagination ---
   const limit = Math.min(params.limit || 30, 100)
@@ -364,6 +360,14 @@ async function serveFromBatchesOrFallback(
   }
 
   const page = slicePool.slice(0, limit)
+
+  // --- Fallback if all else fails (e.g. batch consumed by pagination) ---
+  if (page.length === 0) {
+    console.log(`[Semantic Serve] All semantic sources exhausted (page empty), falling back to pure live pipeline`)
+    // We clear the cursor parameter because the semantic cursor is incompatible with the live pipeline
+    // This allows the live pipeline to start fresh from its own top posts.
+    return algo(ctx, { ...params, cursor: undefined }, requesterDid)
+  }
 
   // --- Logging and Metrics ---
   const semanticCount = page.filter(p => (p as any).source !== 'live_interspliced').length

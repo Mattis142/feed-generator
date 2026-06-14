@@ -369,6 +369,41 @@ async function run() {
                 .limit(1000)  // Get up to 1000 likes for profile clustering
                 .execute()
 
+            // --- BACKFILL LIKES FROM BSKY API ---
+            console.log(`[Batch Pipeline] Fetching historical likes from Bluesky API for backfill...`)
+            try {
+                let cursor: string | undefined = undefined
+                let fetchedCount = 0
+                while (true) {
+                    const response = await repoAgent.api.com.atproto.repo.listRecords({
+                        repo: userDid,
+                        collection: 'app.bsky.feed.like',
+                        limit: 100,
+                        cursor,
+                    })
+
+                    if (!response.data.records || response.data.records.length === 0) break
+
+                    for (const record of response.data.records) {
+                        const uri = (record.value as any)?.subject?.uri
+                        if (uri && typeof uri === 'string' && uri.includes('app.bsky.feed.post')) {
+                            // Only add if not already in recentLikes
+                            if (!recentLikes.some(l => l.target === uri)) {
+                                recentLikes.push({ target: uri, type: 'like' })
+                            }
+                        }
+                    }
+
+                    fetchedCount += response.data.records.length
+                    cursor = response.data.cursor
+
+                    if (!cursor || fetchedCount >= 200) break // Fetch up to 200 recent likes to ensure rich profile
+                }
+                console.log(`[Batch Pipeline] Fetched ${fetchedCount} historical likes from API`)
+            } catch (err) {
+                console.log(`[Batch Pipeline] Failed to fetch historical likes:`, err)
+            }
+
             const recentFeedback = await db
                 .selectFrom('graph_interaction')
                 .select(['target', 'type', 'weight'])
@@ -447,19 +482,16 @@ async function run() {
                 if (missingUris.length > 0) {
                     console.log(`[Batch Pipeline] ${missingUris.length} liked posts not yet embedded — embedding now...`)
 
-                    // Fetch text for missing liked posts from local post table
-                    const missingPosts = await db
-                        .selectFrom('post')
-                        .select(['uri', 'text', 'author', 'indexedAt', 'likeCount'])
-                        .where('uri', 'in', missingUris)
-                        .execute()
-
-                    // Enrich with AppView data for images
-                    console.log(`[Batch Pipeline] Fetching full post details for ${missingPosts.length} liked posts...`)
+                    // We don't filter by missingPosts anymore, we fetch ALL missingUris directly from AppView
+                    console.log(`[Batch Pipeline] Fetching full post details for ${missingUris.length} liked posts from AppView...`)
                     const richLikedPosts: any[] = []
+                    
+                    // We also need post metadata (author, indexedAt) for the Qdrant payload. 
+                    // We can extract this directly from the AppView response.
+                    const postMetadataMap = new Map<string, { author: string, indexedAt: string, likeCount: number }>()
 
                     // Batch fetch from AppView
-                    const urisToFetch = missingPosts.map((p: any) => p.uri)
+                    const urisToFetch = missingUris
                     for (let i = 0; i < urisToFetch.length; i += 25) {
                         const batchUris = urisToFetch.slice(i, i + 25)
                         process.stdout.write(`\r  [AppView] Fetching liked posts: ${i}/${urisToFetch.length}...`)
@@ -486,10 +518,16 @@ async function run() {
                                         image_urls,
                                         alt_text
                                     })
+                                    
+                                    postMetadataMap.set(postView.uri, {
+                                        author: postView.author.did,
+                                        indexedAt: (record.createdAt || postView.indexedAt) as string,
+                                        likeCount: postView.likeCount || 0
+                                    })
                                 }
                             }
                         } catch (err) {
-                            console.error(`[Batch Pipeline] Failed to fetch liked post details batch ${i}:`, err)
+                            console.error(`\n[Batch Pipeline] Failed to fetch liked post details batch ${i}:`, err)
                         }
                     }
                     console.log(`\n  [AppView] Liked posts fetched: Done.`)
@@ -514,7 +552,7 @@ async function run() {
                             const likePoints = likeEmbedResult
                                 .filter((r: any) => r.vector && r.vector.length === 512)
                                 .map((r: any) => {
-                                    const postData = missingPosts.find(p => p.uri === r.uri)
+                                    const postData = postMetadataMap.get(r.uri)
                                     // Generate deterministic UUID from URI + UserDID for isolation
                                     const hash = crypto.createHash('md5').update(`${userDid}:${r.uri}`).digest('hex')
                                     const uuid = `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20)}`
