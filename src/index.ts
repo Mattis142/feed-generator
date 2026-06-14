@@ -29,7 +29,7 @@ const run = async () => {
   )
 
   // Start Telegram bot polling for commands
-  startTelegramBot()
+  startTelegramBot(server.db)
 
   // Notify on deploy (so you always know when the server restarted)
   notifyDeploy().catch(console.error)

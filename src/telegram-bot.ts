@@ -17,12 +17,15 @@
 import fs from 'fs'
 import path from 'path'
 import dotenv from 'dotenv'
+import { Database } from './db'
 
 dotenv.config()
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID
 const HOSTNAME = process.env.FEEDGEN_HOSTNAME || 'feed.mattis-kabella.com'
+
+let db: Database | null = null
 
 // ─── Persistent alert preferences ────────────────────────────────────────────
 
@@ -203,6 +206,39 @@ export async function notifyDeploy(): Promise<void> {
     await notify('feed_deploy', msg)
 }
 
+// ─── Handle resolution cache ──────────────────────────────────────────────────
+
+const handleCache = new Map<string, string>()
+
+async function resolveHandle(did: string): Promise<string> {
+    if (handleCache.has(did)) return handleCache.get(did)!
+    
+    if (did === 'did:plc:c7m7glv2pfjwvgmtkt6kej5w') return 'mattis-kabella.com'
+    if (did === process.env.FEEDGEN_PUBLISHER_DID) return process.env.BSKY_HANDLE || did.slice(-8)
+
+    try {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 3000)
+        const res = await fetch(`https://plc.directory/${did}`, { signal: controller.signal })
+        clearTimeout(timeoutId)
+
+        if (res.ok) {
+            const data = await res.json() as any
+            if (data.alsoKnownAs && data.alsoKnownAs[0]) {
+                const handle = data.alsoKnownAs[0].replace('at://', '')
+                handleCache.set(did, handle)
+                return handle
+            }
+        }
+    } catch (err) {
+        // ignore and fallback
+    }
+    
+    const short = did.slice(-8)
+    handleCache.set(did, short)
+    return short
+}
+
 // ─── Command handlers ─────────────────────────────────────────────────────────
 
 async function handleStart(): Promise<void> {
@@ -213,6 +249,7 @@ async function handleStart(): Promise<void> {
         '',
         '*Commands:*',
         '/status — current system status',
+        '/batches — view semantic batch consumption & time left',
         '/settings — toggle alert types on/off',
         '/help — show this message',
     ].join('\n')
@@ -236,6 +273,8 @@ async function handleStatus(): Promise<void> {
         `✅ Bot is online and polling`,
         '',
         `*Active alerts:* ${enabledAlerts}`,
+        '',
+        `Use /batches or /monitor to view candidate batch consumption stats.`,
     ].join('\n')
     await sendMessage(msg)
 }
@@ -244,6 +283,110 @@ async function handleSettings(): Promise<void> {
     await sendMessage(buildSettingsText(), {
         reply_markup: buildSettingsKeyboard(),
     })
+}
+
+async function handleBatches(): Promise<void> {
+    if (!db) {
+        await sendMessage('⚠️ Database connection is not available.')
+        return
+    }
+
+    try {
+        const nowMs = Date.now()
+        const BATCH_TTL_HOURS = 12
+        const cutoff = new Date(nowMs - BATCH_TTL_HOURS * 60 * 60 * 1000).toISOString()
+
+        const activeUsers = await db
+            .selectFrom('user_candidate_batch')
+            .select('userDid')
+            .distinct()
+            .where('generatedAt', '>', cutoff)
+            .execute()
+
+        if (activeUsers.length === 0) {
+            await sendMessage('📊 *Semantic Batch Monitor*\n\nNo active batches found in the last 12 hours.')
+            return
+        }
+
+        const lines: string[] = ['📊 *Semantic Batch Monitor*\n']
+
+        for (const user of activeUsers) {
+            const userDid = user.userDid
+            const handle = await resolveHandle(userDid)
+
+            const batchRows = await db
+                .selectFrom('user_candidate_batch')
+                .selectAll()
+                .where('userDid', '=', userDid)
+                .where('generatedAt', '>', cutoff)
+                .execute()
+
+            if (batchRows.length === 0) continue
+
+            const uniqueBatchRowsMap: Record<string, typeof batchRows[0]> = {}
+            let latestGeneratedAt = new Date(0)
+            for (const row of batchRows) {
+                const genTime = new Date(row.generatedAt)
+                if (genTime > latestGeneratedAt) {
+                    latestGeneratedAt = genTime
+                }
+                if (!uniqueBatchRowsMap[row.uri] || row.generatedAt > uniqueBatchRowsMap[row.uri].generatedAt) {
+                    uniqueBatchRowsMap[row.uri] = row
+                }
+            }
+
+            const totalBatchCandidates = Object.keys(uniqueBatchRowsMap).length
+
+            const fatigueLookback = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString()
+            const seenPosts = await db
+                .selectFrom('user_seen_post')
+                .select('uri')
+                .where('userDid', '=', userDid)
+                .where('seenAt', '>', fatigueLookback)
+                .execute()
+
+            const seenUris = new Set(seenPosts.map(sp => sp.uri))
+            let totalServedFromBatches = 0
+            for (const uri of Object.keys(uniqueBatchRowsMap)) {
+                if (seenUris.has(uri)) {
+                    totalServedFromBatches++
+                }
+            }
+
+            const consumptionRatio = totalBatchCandidates > 0
+                ? (totalServedFromBatches / totalBatchCandidates) * 100
+                : 0
+
+            const remaining = totalBatchCandidates - totalServedFromBatches
+
+            const expiresAt = new Date(latestGeneratedAt.getTime() + BATCH_TTL_HOURS * 60 * 60 * 1000)
+            const msLeft = expiresAt.getTime() - nowMs
+            const minutesLeft = Math.max(0, Math.floor(msLeft / 60000))
+            const hoursLeft = Math.floor(minutesLeft / 60)
+            const remMin = minutesLeft % 60
+            const timeLeftStr = minutesLeft <= 0 ? 'Expired' : `${hoursLeft}h ${remMin}m`
+
+            const isRegenerating = consumptionRatio >= 50
+            const statusEmoji = isRegenerating ? '🔄 REGEN TRIGGERED' : '✅ HEALTHY'
+
+            lines.push([
+                `👤 *${handle}*`,
+                `├ 📦 Total candidates: *${totalBatchCandidates}*`,
+                `├ 😋 Consumed: *${totalServedFromBatches}* (${consumptionRatio.toFixed(1)}%)`,
+                `├ 📥 Remaining: *${remaining}*`,
+                `├ 🕒 Generated: *${latestGeneratedAt.toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' })} UTC*`,
+                `├ ⏳ Expires in: *${timeLeftStr}*`,
+                `└ 🩺 Status: *${statusEmoji}*`,
+                ''
+            ].join('\n'))
+        }
+
+        lines.push(`_Updated: ${new Date().toLocaleTimeString('en-US', { hour12: false })}_`)
+        await sendMessage(lines.join('\n'))
+    } catch (err) {
+        console.error('[TelegramBot] Error handling /batches command:', err)
+        await sendMessage(`❌ *Error fetching batch status:*\n\n\`\`\`\n${err instanceof Error ? err.message : String(err)}\n\`\`\``)
+    }
 }
 
 // ─── Update polling loop ──────────────────────────────────────────────────────
@@ -270,6 +413,7 @@ async function pollUpdates(): Promise<void> {
             else if (cmd === '/help') await handleHelp()
             else if (cmd === '/status') await handleStatus()
             else if (cmd === '/settings') await handleSettings()
+            else if (cmd === '/batches' || cmd === '/monitor') await handleBatches()
         }
 
         if (update.callback_query) {
@@ -306,7 +450,8 @@ async function pollUpdates(): Promise<void> {
 
 // ─── Bot startup ──────────────────────────────────────────────────────────────
 
-export function startTelegramBot(): void {
+export function startTelegramBot(database: Database): void {
+    db = database
     if (!BOT_TOKEN || !CHAT_ID) {
         console.log('[TelegramBot] No BOT_TOKEN or CHAT_ID — bot disabled')
         return
