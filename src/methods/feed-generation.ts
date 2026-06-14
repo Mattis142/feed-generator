@@ -428,18 +428,11 @@ async function serveFromBatchesOrFallback(
     item.feedContext = contextParts.join(';')
 
     debugEntries.push({
+      userDid: requesterDid,
       uri: p.uri,
-      adjustedScore: Math.round(p.adjustedScore),
-      semanticScore: p.semanticScore?.toFixed(3),
-      pipelineScore: p.pipelineScore,
-      centroidId: p.centroidId,
-      source: p.source,
-      impactMultiplier: p.impactMultiplier?.toFixed(2),
-      seenCount: p.seenCount,
-      fatigueScore: p.fatigueScore,
-      fatiguePenalty: p.fatiguePenalty,
-      clusterBreakdown: p.clusterBreakdown,
-      pipelineSignals: p.pipelineSignals,
+      score: Math.round(p.adjustedScore),
+      signals: JSON.stringify(p),
+      servedAt: new Date().toISOString(),
     })
 
     return item
