@@ -109,6 +109,17 @@ async function serveFromBatchesOrFallback(
   const now = Date.now()
   const BATCH_TTL_HOURS = 12
 
+  // --- Live Cursor Fast-Path ---
+  // If the cursor has 3 parts (score::time::uri), it's a live pipeline cursor.
+  // This means the user previously exhausted the semantic batch and transitioned to live mode.
+  if (params.cursor) {
+    const parts = params.cursor.split('::')
+    if (parts.length >= 3) {
+      console.log(`[Semantic Serve] Live cursor detected for ${requesterDid.slice(0, 15)}..., routing directly to live pipeline`)
+      return algo(ctx, params, requesterDid)
+    }
+  }
+
   // Load all non-expired candidate batch rows for this user
   const cutoff = new Date(now - BATCH_TTL_HOURS * 60 * 60 * 1000).toISOString()
   const batchRows = await ctx.db
@@ -382,25 +393,75 @@ async function serveFromBatchesOrFallback(
     : '0'
   console.log(`[Semantic Serve] Serving ${page.length} items (${semanticCount} semantic, ${liveCount} live) - avg semantic: ${avgSemantic}, avg impact: ${avgImpact}`)
 
-  // Log debug entries and collect feedContext
   const debugEntries: any[] = []
-  const feed = page.map(c => {
-    const trace = c as any
-    const context = generateFeedContext(trace)
-    
-    debugEntries.push({
-      userDid: requesterDid,
-      uri: trace.uri,
-      score: Math.round(trace.adjustedScore),
-      signals: JSON.stringify(trace),
-      servedAt: new Date().toISOString(),
-    })
-    
-    return { 
-      post: trace.uri,
-      feedContext: context
+
+  let finalFeed = page.map(c => {
+    const p = c as any
+    const item: any = { post: p.uri }
+
+    // Reattach skeleton reasons (e.g. reposts) if available
+    if (p.source === 'live_interspliced' && p.pipelineSignals?.repostUri) {
+      item.reason = {
+        $type: 'app.bsky.feed.defs#skeletonReasonRepost',
+        repost: p.pipelineSignals.repostUri
+      }
     }
+
+    const contextParts = [
+      `v1`,
+      `s:${Math.round(p.adjustedScore)}`,
+      `src:${p.source === 'live_interspliced' ? 'liv' : 'sem'}`,
+    ]
+
+    if (p.source !== 'live_interspliced') {
+      contextParts.push(`sem:${p.semanticScore.toFixed(3)}`)
+      contextParts.push(`pipe:${p.pipelineScore}`)
+      contextParts.push(`dec:${p.impactMultiplier.toFixed(2)}`)
+      if (p.centroidId !== undefined && p.centroidId !== -1) {
+        const centroidScore = p.clusterBreakdown?.[p.centroidId] || p.semanticScore
+        contextParts.push(`c${p.centroidId}:${centroidScore.toFixed(2)}`)
+      }
+      if (p.seenCount > 0) contextParts.push(`sb:${p.seenCount}`)
+      if (p.fatigueScore > 0) contextParts.push(`auth:${Math.round(p.fatigueScore)}(${Math.round(p.fatiguePenalty)})`)
+    }
+
+    item.feedContext = contextParts.join(';')
+
+    debugEntries.push({
+      uri: p.uri,
+      adjustedScore: Math.round(p.adjustedScore),
+      semanticScore: p.semanticScore?.toFixed(3),
+      pipelineScore: p.pipelineScore,
+      centroidId: p.centroidId,
+      source: p.source,
+      impactMultiplier: p.impactMultiplier?.toFixed(2),
+      seenCount: p.seenCount,
+      fatigueScore: p.fatigueScore,
+      fatiguePenalty: p.fatiguePenalty,
+      clusterBreakdown: p.clusterBreakdown,
+      pipelineSignals: p.pipelineSignals,
+    })
+
+    return item
   })
+
+  let newCursor: string | undefined = undefined
+  if (page.length > 0) {
+    const last = page[page.length - 1] as any
+    newCursor = page.length === limit ? `${last.adjustedScore}::${last.uri}` : undefined
+  }
+
+  // --- Seamless Live Padding ---
+  // If the semantic batch couldn't fill the page, pad the rest with live posts and hand off the live cursor.
+  if (page.length < limit) {
+    console.log(`[Semantic Serve] Semantic batch exhausted mid-page (${page.length}/${limit}), padding with live pipeline...`)
+    const needed = limit - page.length
+    // Clear the semantic cursor since we are transitioning to live
+    const liveResult = await algo(ctx, { ...params, cursor: undefined, limit: needed }, requesterDid)
+    
+    finalFeed = [...finalFeed, ...liveResult.feed]
+    newCursor = liveResult.cursor
+  }
 
   // Re-enable debug logging
   if (debugEntries.length > 0) {
@@ -410,12 +471,6 @@ async function serveFromBatchesOrFallback(
       .execute()
       .catch(err => logger.error(`[Semantic Debug Log Error] ${err}`))
   }
-
-  const last = page[page.length - 1]
-  const cursor =
-    last && page.length === limit
-      ? `${last.adjustedScore}::${last.uri}`
-      : undefined
 
   // Check batch consumption: use deduplicated counts for accurate trigger
   const totalBatchCandidates = decayed.length
@@ -433,7 +488,7 @@ async function serveFromBatchesOrFallback(
     }
   }
 
-  return { feed, cursor }
+  return { feed: finalFeed, cursor: newCursor }
 }
 
 function generateFeedContext(trace: any): string {
