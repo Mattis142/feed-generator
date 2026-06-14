@@ -47,94 +47,102 @@ export default function (server: Server, ctx: AppContext) {
         logger.error(`Background graph build failed for ${requesterDid}`, err)
       })
 
-      // --- Preload Cache System ---
-      // Only check the preload cache if this is a fresh refresh (no cursor)
-      const isFirstPage = !params.cursor
+      // --- Preload Cache System (YouTube Buffer Style) ---
+      const cacheKeyParams = params.cursor ? params.cursor : 'refresh'
+      const cacheKey = `preload_feed_${requesterDid}_${cacheKeyParams}`
+      
       let preloadedBody: any = null
       let servedFromPreload = false
 
-      if (isFirstPage) {
-        try {
-          const cacheMeta = await ctx.db
-            .selectFrom('graph_meta')
-            .selectAll()
-            .where('key', '=', `preload_feed_${requesterDid}`)
-            .executeTakeFirst()
+      try {
+        const cacheMeta = await ctx.db
+          .selectFrom('graph_meta')
+          .selectAll()
+          .where('key', '=', cacheKey)
+          .executeTakeFirst()
 
-          if (cacheMeta) {
-            const ageHours = (Date.now() - new Date(cacheMeta.updatedAt).getTime()) / (1000 * 60 * 60)
-            if (ageHours < 48) {
-              preloadedBody = JSON.parse(cacheMeta.value)
-              servedFromPreload = true
-              console.log(`[Preload Cache] Successfully served hot feed for ${requesterDid.slice(0, 15)}... (age: ${ageHours.toFixed(2)}h)`)
-            }
+        if (cacheMeta) {
+          const ageHours = (Date.now() - new Date(cacheMeta.updatedAt).getTime()) / (1000 * 60 * 60)
+          if (ageHours < 48) {
+            preloadedBody = JSON.parse(cacheMeta.value)
+            servedFromPreload = true
+            console.log(`[Preload Cache] Successfully served hot feed for ${requesterDid.slice(0, 15)}... (key: ${cacheKeyParams}, age: ${ageHours.toFixed(2)}h)`)
           }
-        } catch (err) {
-          logger.error(`Error reading preload cache for ${requesterDid}:`, err)
         }
+      } catch (err) {
+        logger.error(`Error reading preload cache for ${requesterDid}:`, err)
       }
 
       let body: any;
 
       if (servedFromPreload && preloadedBody) {
         body = preloadedBody
-
-        // Fire and forget: immediately compute the NEXT preload
+      } else {
+        // Normal synchronous path if no cache
+        console.log(`[Preload Cache] Cache miss for ${requesterDid.slice(0, 15)}... (key: ${cacheKeyParams}), running synchronously.`)
+        body = await serveFromBatchesOrFallback(ctx, algo, params, requesterDid)
+        
+        // Save the synchronous result to cache so it's there if they request it again
         Promise.resolve().then(async () => {
-          try {
-            console.log(`[Preload Cache] Generating background preload feed for ${requesterDid.slice(0, 15)}...`)
-            const newBody = await serveFromBatchesOrFallback(ctx, algo, params, requesterDid)
+            await ctx.db
+              .insertInto('graph_meta')
+              .values({
+                key: cacheKey,
+                value: JSON.stringify(body),
+                updatedAt: new Date().toISOString()
+              })
+              .onConflict(oc => oc.column('key').doUpdateSet({
+                value: JSON.stringify(body),
+                updatedAt: new Date().toISOString()
+              }))
+              .execute()
+        }).catch(() => {})
+      }
+
+      // Fire and forget: immediately compute the NEXT page buffer AND fresh refresh cache
+      Promise.resolve().then(async () => {
+        try {
+          // 1. Buffer the NEXT page (YouTube style)
+          if (body.cursor) {
+            console.log(`[Preload Cache] Buffering next page for ${requesterDid.slice(0, 15)}...`)
+            const nextParams = { ...params, cursor: body.cursor }
+            const nextBody = await serveFromBatchesOrFallback(ctx, algo, nextParams, requesterDid)
             
             await ctx.db
               .insertInto('graph_meta')
               .values({
-                key: `preload_feed_${requesterDid}`,
-                value: JSON.stringify(newBody),
+                key: `preload_feed_${requesterDid}_${body.cursor}`,
+                value: JSON.stringify(nextBody),
                 updatedAt: new Date().toISOString()
               })
               .onConflict(oc => oc.column('key').doUpdateSet({
-                value: JSON.stringify(newBody),
+                value: JSON.stringify(nextBody),
                 updatedAt: new Date().toISOString()
               }))
               .execute()
-            
-            console.log(`[Preload Cache] Background feed successfully generated and saved for ${requesterDid.slice(0, 15)}...`)
-          } catch (err) {
-            logger.error(`[Preload Cache] Background generation failed for ${requesterDid}:`, err)
           }
-        }).catch(err => logger.error('[Preload Cache] Unhandled error in background task:', err))
 
-      } else {
-        // --- Semantic Batch Serve Mode / Fallback ---
-        // Normal synchronous path if no cache or pagination
-        body = await serveFromBatchesOrFallback(ctx, algo, params, requesterDid)
-
-        // If it was a first page request, let's pre-generate the next one so it's ready!
-        if (isFirstPage) {
-          Promise.resolve().then(async () => {
-            try {
-              console.log(`[Preload Cache] Initial generation: creating background preload feed for ${requesterDid.slice(0, 15)}...`)
-              const newBody = await serveFromBatchesOrFallback(ctx, algo, params, requesterDid)
-              
-              await ctx.db
-                .insertInto('graph_meta')
-                .values({
-                  key: `preload_feed_${requesterDid}`,
-                  value: JSON.stringify(newBody),
-                  updatedAt: new Date().toISOString()
-                })
-                .onConflict(oc => oc.column('key').doUpdateSet({
-                  value: JSON.stringify(newBody),
-                  updatedAt: new Date().toISOString()
-                }))
-                .execute()
-              console.log(`[Preload Cache] Background feed successfully generated and saved for ${requesterDid.slice(0, 15)}...`)
-            } catch (err) {
-              logger.error(`[Preload Cache] Initial background generation failed for ${requesterDid}:`, err)
-            }
-          }).catch(err => logger.error('[Preload Cache] Unhandled error in background task:', err))
+          // 2. If this was a refresh request, also pre-calculate a fresh top-of-feed for their next pull-to-refresh
+          if (!params.cursor) {
+            console.log(`[Preload Cache] Generating fresh refresh cache for ${requesterDid.slice(0, 15)}...`)
+            const refreshBody = await serveFromBatchesOrFallback(ctx, algo, { ...params, cursor: undefined }, requesterDid)
+            await ctx.db
+              .insertInto('graph_meta')
+              .values({
+                key: `preload_feed_${requesterDid}_refresh`,
+                value: JSON.stringify(refreshBody),
+                updatedAt: new Date().toISOString()
+              })
+              .onConflict(oc => oc.column('key').doUpdateSet({
+                value: JSON.stringify(refreshBody),
+                updatedAt: new Date().toISOString()
+              }))
+              .execute()
+          }
+        } catch (err) {
+          logger.error(`[Preload Cache] Background generation failed for ${requesterDid}:`, err)
         }
-      }
+      }).catch(err => logger.error('[Preload Cache] Unhandled error in background task:', err))
 
       // Record served posts for fatigue memory (background)
       const servedUris = body.feed.map(f => f.post)
