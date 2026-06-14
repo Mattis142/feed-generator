@@ -213,6 +213,18 @@ export async function getTasteSimilarUsers(
   userDid: string,
   limit: number = 50
 ): Promise<Array<{ userDid: string; reputationScore: number; agreementCount: number }>> {
+  
+  // 1. Fetch user's recent likes for activity decay
+  const recentLikes = await ctx.db
+    .selectFrom('graph_interaction')
+    .select('indexedAt')
+    .where('actor', '=', userDid)
+    .where('type', '=', 'like')
+    .orderBy('indexedAt', 'desc')
+    .limit(500)
+    .execute()
+
+  // 2. Fetch all twins
   const results = await ctx.db
     .selectFrom('taste_reputation')
     .leftJoin('taste_similarity', (join) =>
@@ -222,19 +234,55 @@ export async function getTasteSimilarUsers(
     .select([
       'taste_reputation.similarUserDid as userDid',
       'taste_reputation.reputationScore',
+      'taste_reputation.updatedAt',
+      'taste_reputation.decayRate',
       'taste_similarity.agreementCount'
     ])
     .where('taste_reputation.userDid', '=', userDid)
-    .where('taste_reputation.reputationScore', '>', 0.5) // Only get users with decent reputation
-    .orderBy('taste_reputation.reputationScore', 'desc')
-    .limit(limit)
     .execute()
 
-  return results.map(r => ({
-    userDid: r.userDid,
-    reputationScore: r.reputationScore,
-    agreementCount: r.agreementCount ?? 1 // Default to 1 if we only have reputation from API discovery
-  }))
+  // 3. Calculate dynamic decay
+  const decayedTwins: Array<{ userDid: string; reputationScore: number; agreementCount: number }> = []
+
+  for (const r of results) {
+    const hoursSinceUpdate = (Date.now() - new Date(r.updatedAt).getTime()) / (1000 * 60 * 60)
+    let decayedScore = r.reputationScore
+
+    if (r.reputationScore > 1.0) {
+      // Positive Twin: Activity decay + Relaxed Time decay
+      const likesSinceUpdate = recentLikes.filter(l => new Date(l.indexedAt).getTime() > new Date(r.updatedAt).getTime()).length
+      const activityMultiplier = Math.pow(0.95, likesSinceUpdate / 50) // More lenient: 5% per 50 likes
+      const timeMultiplier = Math.pow(0.98, hoursSinceUpdate / 24)
+      
+      const distance = r.reputationScore - 1.0
+      const newDistance = distance * activityMultiplier * timeMultiplier
+      decayedScore = 1.0 + newDistance
+    } else if (r.reputationScore < 1.0) {
+      // Negative Twin: Time decay only, -5% per day
+      const timeMultiplier = Math.pow(0.95, hoursSinceUpdate / 24)
+      
+      const distance = 1.0 - r.reputationScore
+      const newDistance = distance * timeMultiplier
+      decayedScore = 1.0 - newDistance
+    }
+
+    decayedTwins.push({
+      userDid: r.userDid,
+      reputationScore: decayedScore,
+      agreementCount: r.agreementCount ?? 1
+    })
+  }
+
+  // 4. Separate positive and negative twins
+  const positiveTwins = decayedTwins.filter(t => t.reputationScore > 1.1)
+    .sort((a, b) => b.reputationScore - a.reputationScore)
+    .slice(0, limit)
+
+  const negativeTwins = decayedTwins.filter(t => t.reputationScore < 0.9)
+    .sort((a, b) => a.reputationScore - b.reputationScore) // Lowest first
+    .slice(0, limit)
+
+  return [...positiveTwins, ...negativeTwins]
 }
 
 // Get posts liked by taste-similar users
@@ -272,10 +320,11 @@ export async function getPostsLikedBySimilarUsers(
     }
 
     postMap[postUri].similarUserDids.push(like.actor)
-    postMap[postUri].totalScore += similarUser.reputationScore
+    // Center the reputation score so that < 1.0 becomes a penalty, and > 1.0 becomes a boost
+    postMap[postUri].totalScore += (similarUser.reputationScore - 1.0)
   }
 
-  // Convert to array and sort by boost score
+  // Convert to array and sort by boost score (both positive and negative)
   return Object.entries(postMap)
     .map(([postUri, data]) => ({
       postUri,
@@ -296,10 +345,33 @@ export async function cleanupOldTasteData(ctx: AppContext | { db: Database }, da
     .where('agreementCount', '<', 3)
     .execute()
 
-  // Delete old reputation records with low scores
-  await ctx.db
-    .deleteFrom('taste_reputation')
+  // For reputation records, we calculate their basic time decay
+  // and delete them if their decayed score is close to 1.0 (between 0.7 and 1.3)
+  const oldRecords = await ctx.db
+    .selectFrom('taste_reputation')
+    .selectAll()
     .where('updatedAt', '<', cutoffDate)
-    .where('reputationScore', '<', 0.3)
     .execute()
+
+  for (const r of oldRecords) {
+    const hoursSinceUpdate = (Date.now() - new Date(r.updatedAt).getTime()) / (1000 * 60 * 60)
+    let decayedScore = r.reputationScore
+
+    if (r.reputationScore > 1.0) {
+      const timeMultiplier = Math.pow(0.98, hoursSinceUpdate / 24)
+      decayedScore = 1.0 + ((r.reputationScore - 1.0) * timeMultiplier)
+    } else if (r.reputationScore < 1.0) {
+      const timeMultiplier = Math.pow(0.95, hoursSinceUpdate / 24)
+      decayedScore = 1.0 - ((1.0 - r.reputationScore) * timeMultiplier)
+    }
+
+    // If the score has decayed back to neutrality (between 0.7 and 1.3), delete it
+    if (decayedScore >= 0.7 && decayedScore <= 1.3) {
+      await ctx.db
+        .deleteFrom('taste_reputation')
+        .where('userDid', '=', r.userDid)
+        .where('similarUserDid', '=', r.similarUserDid)
+        .execute()
+    }
+  }
 }

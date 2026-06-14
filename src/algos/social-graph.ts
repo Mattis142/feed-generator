@@ -780,7 +780,9 @@ export const handler = async (
             tasteBoost = tasteData.boostScore * 2500 // Increased from 1500
             const consensusMultiplier = Math.min(4.0, 1 + (tasteData.similarUserDids.length - 1) * 0.8) // More aggressive consensus boost
             tasteBoost *= consensusMultiplier
-            discoveryMatch = true
+            if (tasteBoost > 0) {
+                discoveryMatch = true
+            }
         }
 
         // 2. Keyword Boost (Whole Word Matching only to prevent false positives like "post" in "posters")
@@ -835,7 +837,7 @@ export const handler = async (
             // Inside social graph - apply standard boosts
             score += keywordBoost + tasteBoost
             if (keywordBoost !== 0) signals['keyword_boost'] = Math.round(keywordBoost)
-            if (tasteBoost > 0) signals['taste_boost'] = Math.round(tasteBoost)
+            if (tasteBoost !== 0) signals['taste_boost'] = Math.round(tasteBoost)
         }
 
         // OP Boost: Give original posts a small boost to encourage thread starts
@@ -1073,11 +1075,17 @@ export const handler = async (
         // JITTER NERF: If this is an outside post with no keyword or taste match, slash the jitter range
         // This prevents "unlucky" users from seeing random global content just because it got a high roll.
         let jitterRange = 1200
+        let minJitter = 0
         if (isOutsideSocialGraph && !discoveryMatch) {
             jitterRange = 300 // 75% reduction in "luck" potential
+        } else if (tasteData && tasteData.boostScore > 0.5) {
+            // Serious jitter for strong taste twins to ensure they piece through the feed
+            minJitter = 800
+            jitterRange = 800 // 800 to 1600 range
         }
 
-        const jitter = (salt.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0) % jitterRange + jitterRange) % jitterRange
+        const jitterBase = (salt.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0) % jitterRange + jitterRange) % jitterRange
+        const jitter = minJitter + jitterBase
         score += jitter
         signals['jitter'] = jitter
 
