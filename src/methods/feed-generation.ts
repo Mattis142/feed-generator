@@ -407,25 +407,7 @@ async function serveFromBatchesOrFallback(
       }
     }
 
-    const contextParts = [
-      `v1`,
-      `s:${Math.round(p.adjustedScore)}`,
-      `src:${p.source === 'live_interspliced' ? 'liv' : 'sem'}`,
-    ]
-
-    if (p.source !== 'live_interspliced') {
-      contextParts.push(`sem:${p.semanticScore.toFixed(3)}`)
-      contextParts.push(`pipe:${p.pipelineScore}`)
-      contextParts.push(`dec:${p.impactMultiplier.toFixed(2)}`)
-      if (p.centroidId !== undefined && p.centroidId !== -1) {
-        const centroidScore = p.clusterBreakdown?.[p.centroidId] || p.semanticScore
-        contextParts.push(`c${p.centroidId}:${centroidScore.toFixed(2)}`)
-      }
-      if (p.seenCount > 0) contextParts.push(`sb:${p.seenCount}`)
-      if (p.fatigueScore > 0) contextParts.push(`auth:${Math.round(p.fatigueScore)}(${Math.round(p.fatiguePenalty)})`)
-    }
-
-    item.feedContext = contextParts.join(';')
+    item.feedContext = generateFeedContext(p)
 
     debugEntries.push({
       userDid: requesterDid,
