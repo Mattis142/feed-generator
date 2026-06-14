@@ -217,7 +217,13 @@ async function serveFromBatchesOrFallback(
         } else {
           // Apply permanent -80% multiplier per view
           seenMultiplier = Math.pow(0.2, seenCount) // 0.2^seenCount
-          adjustedScore *= seenMultiplier
+          if (adjustedScore >= 0) {
+            adjustedScore *= seenMultiplier
+          } else {
+            // For negative scores, dividing by seenMultiplier scales it further negative (penalizing it)
+            // e.g. -1000 * (1 / 0.2) = -5000. This pushes it below the -2000 filter cutoff.
+            adjustedScore /= seenMultiplier
+          }
         }
       }
 
