@@ -66,6 +66,7 @@ export default function (server: Server, ctx: AppContext) {
                 if (explicitGraphInserts.length > 0) {
                   await ctx.db.insertInto('graph_interaction')
                     .values(explicitGraphInserts)
+                    .onConflict((oc) => oc.doNothing())
                     .execute()
                     .catch(e => logger.error('[Interactions] Failed to insert explicit graph interactions', e))
                 }
