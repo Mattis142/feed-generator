@@ -604,3 +604,16 @@ migrations['023'] = {
       .execute()
   },
 }
+
+migrations['024'] = {
+  async up(db: Kysely<any>) {
+    await db.schema
+      .createIndex('graph_interaction_actor_type_idx_v2')
+      .on('graph_interaction')
+      .columns(['actor', 'type', 'indexedAt'])
+      .execute()
+  },
+  async down(db: Kysely<any>) {
+    await db.schema.dropIndex('graph_interaction_actor_type_idx_v2').execute()
+  },
+}
