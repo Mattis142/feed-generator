@@ -77,22 +77,30 @@ export default function (server: Server, ctx: AppContext) {
 
       if (servedFromPreload && preloadedBody) {
         body = preloadedBody
+        // If the client requested fewer items than what we cached (e.g. limit=1 polling), slice the response
+        if (params.limit && body.feed.length > params.limit) {
+          body = {
+            feed: body.feed.slice(0, params.limit),
+            cursor: params.limit === 1 ? undefined : body.cursor
+          }
+        }
       } else {
         // Normal synchronous path if no cache
         console.log(`[Preload Cache] Cache miss for ${requesterDid.slice(0, 15)}... (key: ${cacheKeyParams}), running synchronously.`)
-        body = await serveFromBatchesOrFallback(ctx, algo, params, requesterDid)
+        body = await serveFromBatchesOrFallback(ctx, algo, { ...params, limit: Math.max(params.limit || 30, 30) }, requesterDid)
         
         // Save the synchronous result to cache so it's there if they request it again
+        const bodyToCache = body
         Promise.resolve().then(async () => {
             await ctx.db
               .insertInto('graph_meta')
               .values({
                 key: cacheKey,
-                value: JSON.stringify(body),
+                value: JSON.stringify(bodyToCache),
                 updatedAt: new Date().toISOString()
               })
               .onConflict(oc => oc.column('key').doUpdateSet({
-                value: JSON.stringify(body),
+                value: JSON.stringify(bodyToCache),
                 updatedAt: new Date().toISOString()
               }))
               .execute()
@@ -103,15 +111,18 @@ export default function (server: Server, ctx: AppContext) {
       Promise.resolve().then(async () => {
         try {
           // 1. Buffer the NEXT page (YouTube style)
-          if (body.cursor) {
+          // Always use the original preloaded cursor to fetch the next page, even if we sliced it for a limit=1 poll
+          const nextCursor = preloadedBody ? preloadedBody.cursor : body.cursor;
+          if (nextCursor) {
             console.log(`[Preload Cache] Buffering next page for ${requesterDid.slice(0, 15)}...`)
-            const nextParams = { ...params, cursor: body.cursor }
+            // Force limit: 30 so the background buffer always caches a full page
+            const nextParams = { ...params, limit: 30, cursor: nextCursor }
             const nextBody = await serveFromBatchesOrFallback(ctx, algo, nextParams, requesterDid)
             
             await ctx.db
               .insertInto('graph_meta')
               .values({
-                key: `preload_feed_${requesterDid}_${body.cursor}`,
+                key: `preload_feed_${requesterDid}_${nextCursor}`,
                 value: JSON.stringify(nextBody),
                 updatedAt: new Date().toISOString()
               })
@@ -125,7 +136,8 @@ export default function (server: Server, ctx: AppContext) {
           // 2. If this was a refresh request, also pre-calculate a fresh top-of-feed for their next pull-to-refresh
           if (!params.cursor) {
             console.log(`[Preload Cache] Generating fresh refresh cache for ${requesterDid.slice(0, 15)}...`)
-            const refreshBody = await serveFromBatchesOrFallback(ctx, algo, { ...params, cursor: undefined }, requesterDid)
+            // Force limit: 30 so the background refresh always caches a full page
+            const refreshBody = await serveFromBatchesOrFallback(ctx, algo, { ...params, limit: 30, cursor: undefined }, requesterDid)
             await ctx.db
               .insertInto('graph_meta')
               .values({
