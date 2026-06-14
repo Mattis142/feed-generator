@@ -629,16 +629,20 @@ export const handler = async (
         .where('indexedAt', '>', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()) // Last 24 hours
         .execute()
 
-    for (const interaction of recentUserInteractions) {
-        const tasteData = tasteSimilarPostMap.get(interaction.target)
-        if (tasteData) {
-            // User interacted with a post recommended by taste-similar users
-            const action = interaction.type === 'like' ? 'served_liked' : 'served_ignored'
-            for (const similarUserDid of tasteData.similarUserDids) {
-                await updateTasteReputation(ctx, requesterDid, similarUserDid, action)
+    // Update reputation asynchronously in the background so it doesn't block the feed request
+    // or starve the connection pool if multiple requests hit simultaneously
+    Promise.resolve().then(async () => {
+        for (const interaction of recentUserInteractions) {
+            const tasteData = tasteSimilarPostMap.get(interaction.target)
+            if (tasteData) {
+                // User interacted with a post recommended by taste-similar users
+                const action = interaction.type === 'like' ? 'served_liked' : 'served_ignored'
+                for (const similarUserDid of tasteData.similarUserDids) {
+                    await updateTasteReputation(ctx, requesterDid, similarUserDid, action)
+                }
             }
         }
-    }
+    }).catch(err => console.error('[Taste Reputation Background] Error:', err))
 
     // Scoring
     const scoredPosts = uniquePosts.map((post) => {
