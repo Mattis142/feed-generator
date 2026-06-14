@@ -621,14 +621,25 @@ export const handler = async (
         .where('userDid', '=', requesterDid)
         .execute()
 
-    const keywordMap = new Map<string, { weight: number; regex: RegExp }>()
+    const keywordMap = new Map<string, { weight: number }>()
     userKeywords.forEach(kw => {
         const keyword = kw.keyword.toLowerCase()
-        try {
-            const regex = new RegExp(`\\b${keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i')
-            keywordMap.set(keyword, { weight: kw.score, regex })
-        } catch (e) {}
+        keywordMap.set(keyword, { weight: kw.score })
     })
+    
+    let compiledRegex: RegExp | null = null;
+    if (keywordMap.size > 0) {
+        // Sort by length descending so longer phrases match first
+        const escapedKeywords = Array.from(keywordMap.keys())
+            .sort((a, b) => b.length - a.length)
+            .map(k => k.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'))
+        try {
+            compiledRegex = new RegExp(`\\b(${escapedKeywords.join('|')})\\b`, 'ig')
+        } catch (e) {
+            console.error('[Keyword Analysis] Failed to compile giant regex:', e)
+        }
+    }
+    
     console.log(`[Interest Keywords] Loaded ${keywordMap.size} keywords for user`)
 
     // 2.6. Taste Similarity Analysis - MOVED UP
@@ -773,15 +784,20 @@ export const handler = async (
         }
 
         // 2. Keyword Boost (Whole Word Matching only to prevent false positives like "post" in "posters")
-        if (post.text && keywordMap.size > 0) {
-            const textLower = post.text.toLowerCase()
-            for (const [keyword, data] of keywordMap.entries()) {
-                if (data.regex.test(textLower)) {
-                    hasKeywordMatch = true
-                    discoveryMatch = true
-                    // Multiplier: increased for discovery punch-through
-                    const multiplier = isOutsideSocialGraph ? (batchMode ? 800 : 1200) : 100
-                    keywordBoost += data.weight * multiplier
+        if (post.text && compiledRegex) {
+            const matches = post.text.match(compiledRegex)
+            if (matches) {
+                // Deduplicate matches so each keyword's weight is only applied once
+                const uniqueMatches = new Set(matches.map(m => m.toLowerCase()))
+                for (const matchedWord of uniqueMatches) {
+                    const data = keywordMap.get(matchedWord)
+                    if (data) {
+                        hasKeywordMatch = true
+                        discoveryMatch = true
+                        // Multiplier: increased for discovery punch-through
+                        const multiplier = isOutsideSocialGraph ? (batchMode ? 800 : 1200) : 100
+                        keywordBoost += data.weight * multiplier
+                    }
                 }
             }
         }
