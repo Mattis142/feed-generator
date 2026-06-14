@@ -64,6 +64,10 @@ export class QdrantDatabase {
         field_name: 'likeCount',
         field_schema: 'integer',
       });
+      await this.client.createPayloadIndex('feed_post_embeddings', {
+        field_name: 'discoveredBy',
+        field_schema: 'keyword',
+      });
     } else {
       console.log('[Qdrant] Collection feed_post_embeddings already exists');
     }
