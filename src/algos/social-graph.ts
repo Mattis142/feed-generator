@@ -455,17 +455,27 @@ export const handler = async (
         ]))
         .execute()
 
-    const networkEffortMap: Record<string, { likes: number, reposts: number, actors: Set<string>, repostUri?: string }> = {}
+    const networkEffortMap: Record<string, { l1Likes: number, l2Likes: number, l1Reposts: number, l2Reposts: number, actors: Set<string>, repostUri?: string }> = {}
     interactions.forEach(int => {
         if (!networkEffortMap[int.target]) {
-            networkEffortMap[int.target] = { likes: 0, reposts: 0, actors: new Set() }
+            networkEffortMap[int.target] = { l1Likes: 0, l2Likes: 0, l1Reposts: 0, l2Reposts: 0, actors: new Set() }
         }
-        if (int.type === 'like') networkEffortMap[int.target].likes++
+        
+        const isL1 = layer1Dids.has(int.actor)
+        
+        if (int.type === 'like') {
+            if (isL1) networkEffortMap[int.target].l1Likes++
+            else networkEffortMap[int.target].l2Likes++
+        }
         if (int.type === 'repost') {
-            networkEffortMap[int.target].reposts++
-            // Track the repost URI if it's from a Layer 1 follow (direct friend)
-            if (int.interactionUri && layer1Dids.has(int.actor) && !networkEffortMap[int.target].repostUri) {
-                networkEffortMap[int.target].repostUri = int.interactionUri
+            if (isL1) {
+                networkEffortMap[int.target].l1Reposts++
+                // Track the repost URI if it's from a Layer 1 follow (direct friend)
+                if (int.interactionUri && !networkEffortMap[int.target].repostUri) {
+                    networkEffortMap[int.target].repostUri = int.interactionUri
+                }
+            } else {
+                networkEffortMap[int.target].l2Reposts++
             }
         }
         networkEffortMap[int.target].actors.add(int.actor)
@@ -654,10 +664,16 @@ export const handler = async (
 
         if (isLayer1) {
             const mutualBoost = isMutual ? 3.2 : 1.5  // Increased from 2.5 and 1.0
-            const l1Boost = 8500 * tierDecay * mutualBoost * (0.8 + authorAffinity * 0.2) // Increased from 4500
+            
+            // If affinity drops below 1.0 (due to "show less"), apply a squared penalty (moderate dropoff)
+            const affinityMultiplier = authorAffinity < 1.0 
+                ? Math.pow(authorAffinity, 2)
+                : (0.8 + authorAffinity * 0.2)
+                
+            const l1Boost = 25000 * tierDecay * mutualBoost * affinityMultiplier // Increased from 8500
             score += l1Boost
             signals['layer1'] = Math.round(l1Boost)
-            if (authorAffinity > 1.2) signals['affinity_boost'] = Math.round(l1Boost * (authorAffinity - 1) * 0.2 / (0.8 + authorAffinity * 0.2))
+            if (authorAffinity > 1.2) signals['affinity_boost'] = Math.round(l1Boost * (authorAffinity - 1) * 0.2 / affinityMultiplier)
         } else if (isInteracted) {
             const interactedBoost = 1500 * tierDecay * (0.8 + authorAffinity * 0.2)
             score += interactedBoost
@@ -674,8 +690,12 @@ export const handler = async (
 
         const networkInteractions = networkEffortMap[post.uri]
         if (networkInteractions) {
-            const count = networkInteractions.likes + networkInteractions.reposts
-            const effortBoost = Math.round(Math.pow(count, 1.5) * 200)
+            const l1Count = networkInteractions.l1Likes + networkInteractions.l1Reposts
+            const l2Count = networkInteractions.l2Likes + networkInteractions.l2Reposts
+            
+            // Give L1 interactions a 5x multiplier compared to L2
+            const effectiveCount = (l1Count * 5) + l2Count
+            const effortBoost = Math.round(Math.pow(effectiveCount, 1.5) * 200)
             score += effortBoost
             signals['network_effort'] = effortBoost
         }
