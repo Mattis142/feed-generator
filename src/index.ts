@@ -1,6 +1,7 @@
 import dotenv from 'dotenv'
 import FeedGenerator from './server'
 import { logger } from './logger'
+import { startTelegramBot, notifyDeploy } from './telegram-bot'
 
 const run = async () => {
   dotenv.config()
@@ -26,6 +27,12 @@ const run = async () => {
   console.log(
     `🤖 running feed generator HTTP server at http://${server.cfg.listenhost}:${server.cfg.port}`,
   )
+
+  // Start Telegram bot polling for commands
+  startTelegramBot()
+
+  // Notify on deploy (so you always know when the server restarted)
+  notifyDeploy().catch(console.error)
 }
 
 const maybeStr = (val?: string) => {

@@ -1,31 +1,11 @@
 import dotenv from 'dotenv'
+import { notifyError as tgNotifyError, notify } from './telegram-bot'
 
 dotenv.config()
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID
-
+// Kept for backwards-compat call sites outside logger
 export const notifyTelegram = async (message: string) => {
-    if (!BOT_TOKEN || !CHAT_ID) return
-
-    try {
-        const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: CHAT_ID,
-                text: message.slice(0, 4000), // Telegram has a 4096 char limit
-                parse_mode: 'Markdown',
-            }),
-        })
-
-        if (!response.ok) {
-            console.error('Failed to send Telegram notification:', await response.text())
-        }
-    } catch (err) {
-        console.error('Error sending Telegram notification:', err)
-    }
+    await notify('warnings', message)
 }
 
 export const logger = {
@@ -38,10 +18,6 @@ export const logger = {
     error: (msg: string, err?: any, ...args: any[]) => {
         const errorMessage = err instanceof Error ? err.stack || err.message : String(err)
         console.error(`[ERROR] ${msg}`, errorMessage, ...args)
-
-        // Send to Telegram
-        const hostname = process.env.FEEDGEN_HOSTNAME || 'unknown-host'
-        const telegramMessage = `❌ *Error on ${hostname}*\n\n*Context:* ${msg}\n\n\`\`\`\n${errorMessage}\n\`\`\``
-        notifyTelegram(telegramMessage).catch(console.error)
+        tgNotifyError(msg, err).catch(console.error)
     },
 }

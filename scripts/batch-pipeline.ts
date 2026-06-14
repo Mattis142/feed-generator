@@ -10,6 +10,7 @@ import { promisify } from 'util'
 import crypto from 'crypto'
 import { AtpAgent } from '@atproto/api'
 import { DidResolver, MemoryCache } from '@atproto/identity'
+import { notifyBatchStart, notifyBatchFinish, notifyBatchUserError } from '../src/telegram-bot'
 
 const execAsync = promisify(exec)
 
@@ -104,6 +105,10 @@ async function run() {
     }
 
     console.log(`[Batch Pipeline] Processing ${activeUsers.length} active users`)
+    const batchStartTime = Date.now()
+    let totalCandidatesStored = 0
+    let batchErrors = 0
+    await notifyBatchStart(activeUsers.length).catch(console.error)
 
     // Process each user
     for (const userDid of activeUsers) {
@@ -821,6 +826,7 @@ async function run() {
                 }
 
                 console.log(`[Batch Pipeline] Stored ${topCandidates.length} candidates (batch: ${batchId.slice(0, 8)})`)
+                totalCandidatesStored += topCandidates.length
             }
 
             // --- Cleanup expired batches (older than 12 hours, impact = 0) ---
@@ -834,9 +840,14 @@ async function run() {
 
         } catch (err) {
             console.error(`[Batch Pipeline] Error processing user ${userDid}:`, err)
+            await notifyBatchUserError(userDid, err).catch(console.error)
+            batchErrors++
             continue
         }
     }
+
+    const duration = Date.now() - batchStartTime
+    await notifyBatchFinish({ userCount: activeUsers.length, totalCandidates: totalCandidatesStored, durationMs: duration, errors: batchErrors }).catch(console.error)
 
     console.log('\n[Batch Pipeline] Completed')
     process.exit(0)
