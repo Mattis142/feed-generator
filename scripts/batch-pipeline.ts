@@ -323,6 +323,8 @@ async function run() {
                                     indexedAt: post?.indexedAt || '',
                                     likeCount: post?.likeCount || 0,
                                     discoveredBy: userDid, // THE SIGNATURE
+                                    pipelineScore: post?.score ?? 0, // Persist so future batches can retrieve it
+                                    pipelineSignals: post?.signals ? JSON.stringify(post.signals) : null,
                                 },
                             }
                         })
@@ -703,17 +705,25 @@ async function run() {
                 // QUADRUPLE the search capacity to ensure we find enough new content
                 const searchLimit = Math.round(400 * centroid.weight) + 200
                 try {
+                    // Only return posts indexed in the last 30 days
+                    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
                     const searchResult = await qdrantDB.getClient().search('feed_post_embeddings', {
                         vector: centroid.vector,
                         limit: searchLimit,
                         score_threshold: 0.25, // Slightly looser threshold for broader discovery
                         filter: {
-                            must: [{
-                                key: 'discoveredBy',
-                                match: { value: userDid }
-                            }]
+                            must: [
+                                {
+                                    key: 'discoveredBy',
+                                    match: { value: userDid }
+                                },
+                                {
+                                    key: 'indexedAt',
+                                    range: { gte: thirtyDaysAgo }
+                                }
+                            ]
                         },
-                        with_payload: ['uri', 'author'],
+                        with_payload: ['uri', 'author', 'pipelineScore', 'pipelineSignals'],
                     })
 
                     for (const hit of searchResult) {
@@ -722,11 +732,15 @@ async function run() {
                         if (!uri || likedUriSet.has(uri) || heavilySeenUris.has(uri)) continue
                         if (author && excludedAuthors.has(author)) continue
 
-                        // NEW: If the post was NOT in our social graph pipeline, apply the Discovery Sandbox Penalty
-                        // This prevents unexpected "global" content from bypassing filters
+                        // Use the pipeline score from the current batch if available,
+                        // otherwise fall back to the score stored in Qdrant from a previous batch.
+                        // Only apply the -4000 sandbox penalty if the post has never been
+                        // socially discovered at all (no stored pipelineScore in Qdrant).
                         const pipelineInfo = pipelineScoreMap.get(uri)
-                        let pipelineScore = pipelineInfo?.score ?? -4000 // Standard sandbox penalty for new discovery
-                        let pipelineSignals = pipelineInfo?.signals ?? { sandbox_penalty: -4000, cold_score: 50 }
+                        const storedScore = hit.payload?.pipelineScore as number | undefined
+                        const storedSignals = hit.payload?.pipelineSignals
+                        let pipelineScore = pipelineInfo?.score ?? (storedScore !== undefined ? storedScore : -4000)
+                        let pipelineSignals = pipelineInfo?.signals ?? (storedSignals ? JSON.parse(storedSignals as string) : { sandbox_penalty: -4000, cold_score: 50 })
 
                         semanticCandidates.push({
                             uri,
