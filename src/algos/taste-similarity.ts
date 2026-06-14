@@ -250,8 +250,10 @@ export async function getTasteSimilarUsers(
 
     if (r.reputationScore > 1.0) {
       // Positive Twin: Activity decay + Relaxed Time decay
-      const likesSinceUpdate = recentLikes.filter(l => new Date(l.indexedAt).getTime() > new Date(r.updatedAt).getTime()).length
-      const activityMultiplier = Math.pow(0.95, likesSinceUpdate / 50) // More lenient: 5% per 50 likes
+      // Optimization: ISO 8601 strings can be compared directly alphabetically. 
+      // No need to instantiate millions of Date objects in the loop!
+      const likesSinceUpdate = recentLikes.filter(l => l.indexedAt > r.updatedAt).length
+      const activityMultiplier = Math.pow(0.95, likesSinceUpdate / 50) // Lenient: 5% per 50 likes
       const timeMultiplier = Math.pow(0.98, hoursSinceUpdate / 24)
       
       const distance = r.reputationScore - 1.0
