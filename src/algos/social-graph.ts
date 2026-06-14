@@ -452,25 +452,46 @@ export const handler = async (
 
     // Resolve Layer 2 status only for candidate authors to prevent massive IN clauses
     const uniqueAuthors = Array.from(new Set(uniquePosts.map(p => p.author)))
-    const layer2Rows = await ctx.db
-        .selectFrom('graph_follow')
-        .select('followee')
-        .where('follower', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy'])
-        .where('followee', 'in', uniqueAuthors.length > 0 ? uniqueAuthors : ['dummy'])
-        .execute()
+    
+    // Chunk uniqueAuthors to prevent parameter overflow, and use an EXISTS subquery to avoid passing layer1Dids over the network
+    const layer2Rows: { followee: string }[] = []
+    for (let i = 0; i < uniqueAuthors.length; i += 500) {
+        const chunk = uniqueAuthors.slice(i, i + 500)
+        const chunkRows = await ctx.db
+            .selectFrom('graph_follow as gf2')
+            .select('gf2.followee')
+            .where('gf2.followee', 'in', chunk.length > 0 ? chunk : ['dummy'])
+            .where(eb => eb.exists(
+                eb.selectFrom('graph_follow as gf1')
+                  .where('gf1.follower', '=', requesterDid)
+                  .whereRef('gf1.followee', '=', 'gf2.follower')
+            ))
+            .execute()
+        layer2Rows.push(...chunkRows)
+    }
     const layer2Dids = new Set(layer2Rows.map(r => r.followee))
 
-    // Fetch interactions for scoring
+    // Fetch interactions for scoring (Chunked to prevent Node.js driver from choking on thousands of parameters)
     const postUris = uniquePosts.map(p => p.uri)
-    const interactions = await ctx.db
-        .selectFrom('graph_interaction')
-        .select(['target', 'type', 'actor', 'interactionUri'])
-        .where('target', 'in', postUris.length > 0 ? postUris : ['dummy'])
-        .where((eb) => eb.or([
-            eb('actor', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy']),
-            eb('actor', 'in', Array.from(influentialL2Dids).length > 0 ? Array.from(influentialL2Dids) : ['dummy'])
-        ]))
-        .execute()
+    const combinedDids = Array.from(new Set([...Array.from(layer1Dids), ...Array.from(influentialL2Dids)]))
+    
+    const interactions: any[] = []
+    const interactionPromises: Promise<any[]>[] = []
+    
+    for (let i = 0; i < postUris.length; i += 400) {
+        const chunkUris = postUris.slice(i, i + 400)
+        interactionPromises.push(
+            ctx.db
+                .selectFrom('graph_interaction')
+                .select(['target', 'type', 'actor', 'interactionUri'])
+                .where('target', 'in', chunkUris.length > 0 ? chunkUris : ['dummy'])
+                .where('actor', 'in', combinedDids.length > 0 ? combinedDids : ['dummy'])
+                .execute()
+        )
+    }
+    
+    const results = await Promise.all(interactionPromises)
+    interactions.push(...results.flat())
     tick('Interactions for scoring loaded')
 
     const networkEffortMap: Record<string, { l1Likes: number, l2Likes: number, l1Reposts: number, l2Reposts: number, actors: Set<string>, repostUri?: string }> = {}
