@@ -86,12 +86,7 @@ export const handler = async (
         .execute()
     const layer1Dids = new Set(layer1Rows.map(r => r.followee))
 
-    const layer2Rows = await ctx.db
-        .selectFrom('graph_follow')
-        .select('followee')
-        .where('follower', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy'])
-        .execute()
-    const layer2Dids = new Set(layer2Rows.map(r => r.followee))
+    // layer2Dids will be computed later only for the candidate posts to save memory and DB load
 
     // Mutuals check
     const mutualRows = await ctx.db
@@ -276,7 +271,7 @@ export const handler = async (
         .where('indexedAt', '>', lookback72h)
         .where((eb) => eb.or([
             eb('author', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy']),
-            eb('author', 'in', Array.from(layer2Dids).length > 0 ? Array.from(layer2Dids) : ['dummy']),
+            eb('author', 'in', Array.from(influentialL2Dids).length > 0 ? Array.from(influentialL2Dids) : ['dummy']),
             eb('author', 'in', Array.from(interactedDids).length > 0 ? Array.from(interactedDids) : ['dummy']),
             eb('likeCount', '>', batchMode ? 0 : 2) // Looser in batch mode
         ]))
@@ -317,7 +312,7 @@ export const handler = async (
         .where('indexedAt', '<=', lookback72h)
         .where((eb) => eb.or([
             eb('author', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy']),
-            eb('author', 'in', Array.from(layer2Dids).length > 0 ? Array.from(layer2Dids) : ['dummy']),
+            eb('author', 'in', Array.from(influentialL2Dids).length > 0 ? Array.from(influentialL2Dids) : ['dummy']),
             eb('author', 'in', Array.from(interactedDids).length > 0 ? Array.from(interactedDids) : ['dummy']),
             eb('likeCount', '>', 1) // RESTORED: Limited global discovery
         ]))
@@ -442,6 +437,16 @@ export const handler = async (
     const uniquePosts = Array.from(new Map(allPosts.map(p => [p.uri, p])).values())
 
     console.log(`[Algo] Harvesting completed: ${uniquePosts.length} unique candidates (B1:${posts1.length}, B1.5:${posts1_5.length}, B2:${posts2.length}, B3:${posts3.length})`)
+
+    // Resolve Layer 2 status only for candidate authors to prevent massive IN clauses
+    const uniqueAuthors = Array.from(new Set(uniquePosts.map(p => p.author)))
+    const layer2Rows = await ctx.db
+        .selectFrom('graph_follow')
+        .select('followee')
+        .where('follower', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy'])
+        .where('followee', 'in', uniqueAuthors.length > 0 ? uniqueAuthors : ['dummy'])
+        .execute()
+    const layer2Dids = new Set(layer2Rows.map(r => r.followee))
 
     // Fetch interactions for scoring
     const postUris = uniquePosts.map(p => p.uri)
