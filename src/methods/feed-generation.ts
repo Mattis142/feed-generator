@@ -433,7 +433,7 @@ async function serveFromBatchesOrFallback(
         adjustedScore: baseLiveScore - (index * 5),
         author: extractAuthor(item.post),
         // Defaults for logging/metrics
-        semanticScore: 0,
+        semanticScore: item._score, // Preserve original algo score
         pipelineScore: 0,
         impactMultiplier: 1,
         centroidId: -1,
@@ -443,6 +443,7 @@ async function serveFromBatchesOrFallback(
         seenMultiplier: 1,
         fatigueScore: 0,
         fatiguePenalty: 0,
+        signals: item._signals // PRESERVE SIGNALS!
       }))
 
     // Merge and re-sort with tie-breaker
@@ -571,9 +572,25 @@ async function serveFromBatchesOrFallback(
 }
 
 function generateFeedContext(trace: any): string {
+  // Opaque string format: version;score;source;metrics
+  const version = 'v1'
+  const score = Math.round(trace.adjustedScore || 0)
+  
+  if (trace.source === 'live_interspliced') {
+    let extra = ''
+    if (trace.signals) {
+      const s = trace.signals
+      if (s.taste_boost) extra += `;taste:${Math.round(s.taste_boost)}`
+      if (s.keyword_match) extra += `;kw:${s.keyword_match}`
+      if (s.jitter) extra += `;jit:${Math.round(s.jitter)}`
+      if (trace.semanticScore) extra += `;orig:${Math.round(trace.semanticScore)}`
+    }
+    return `${version};s:${score};src:live${extra}`
+  }
+  
   const parts: string[] = []
-  parts.push(`v1`)
-  parts.push(`s:${Math.round(trace.adjustedScore)}`)
+  parts.push(version)
+  parts.push(`s:${score}`)
   
   if (trace.source === 'semantic_batch') {
     parts.push(`src:sem`)

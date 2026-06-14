@@ -1289,7 +1289,11 @@ export const handler = async (
     }
 
     const feed = page.map((p) => {
-        const item: any = { post: p.post.uri }
+        const item: any = { 
+            post: p.post.uri,
+            _score: p.score,
+            _signals: p.signals 
+        }
         if (p.repostUri && !layer1Dids.has(p.post.author)) {
             item.reason = {
                 $type: 'app.bsky.feed.defs#skeletonReasonRepost',
