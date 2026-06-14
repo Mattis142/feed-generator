@@ -77,6 +77,8 @@ export const handler = async (
     const { batchMode = false } = options
 
     const now = new Date().toISOString()
+    const timerStart = Date.now()
+    const tick = (msg: string) => console.log(`[Timer] ${msg}: ${Date.now() - timerStart}ms`)
 
     // 1. Fetch user's graph (Layer 1 and Layer 2)
     const layer1Rows = await ctx.db
@@ -96,6 +98,7 @@ export const handler = async (
         .where('follower', 'in', Array.from(layer1Dids).length > 0 ? Array.from(layer1Dids) : ['dummy'])
         .execute()
     const mutualDids = new Set(mutualRows.map(r => r.follower))
+    tick('Mutuals loaded')
 
     // 1.5. Bubble Influence Computation with Caching
     const cacheExpiry = 72 * 60 * 60 * 1000 // Increased to 72 hours to reduce regeneration churn
@@ -170,6 +173,7 @@ export const handler = async (
     }
 
     const influentialL2Dids = new Set(influentialL2.map(i => i.did))
+    tick('Influential L2 loaded')
 
     // 1.7. Personal Interaction Scope (Layer 0)
     // Track accounts the user has directly liked or replied to (Top 100 most recent unique authors)
@@ -222,6 +226,8 @@ export const handler = async (
         userInteractionMap[ui.target] = ui.type
     })
 
+    tick('User interactions loaded')
+
     // 2.0. Taste Similarity Analysis - Find users with similar tastes (Increased to 100 for batch, 20 for live to prevent timeout)
     const tasteSimilarUsers = await getTasteSimilarUsers(ctx, requesterDid, batchMode ? 100 : 20)
     console.log(`[Taste Similarity] Found ${tasteSimilarUsers.length} taste-similar users`)
@@ -236,6 +242,7 @@ export const handler = async (
         })
     })
     console.log(`[Taste Similarity] Found ${tasteSimilarPosts.length} posts liked by similar users`)
+    tick('Taste similarity loaded')
 
     // 2.2. Calculate Media Preference Ratio (Recent 100 likes)
     const recentLikes = await ctx.db
@@ -257,6 +264,7 @@ export const handler = async (
     const imageRatio = recentLikes.length > 0 ? imageCount / recentLikes.length : 0.25
     const videoRatio = recentLikes.length > 0 ? videoCount / recentLikes.length : 0.25
     console.log(`[Media Preference] User ${requesterDid.slice(0, 10)} has image ratio: ${imageRatio.toFixed(2)} (${imageCount}/${recentLikes.length}) and video ratio: ${videoRatio.toFixed(2)} (${videoCount}/${recentLikes.length})`)
+    tick('Media preferences loaded')
 
     // 2.5. Discovery & Scoring Pipeline: Global Mix (Anti-Chronological)
     const lookback72h = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString()
@@ -303,6 +311,7 @@ export const handler = async (
         .sort((a, b) => b.score - a.score)
         .slice(0, 1200) // Increased for infinite scroll
         .map(item => item.post)
+    tick('Bucket 1 loaded')
 
     // bucket 1.5: Bridge Activity (3-7 days, medium engagement)
     const bucket1_5Raw = await ctx.db
@@ -341,6 +350,7 @@ export const handler = async (
         .sort((a, b) => b.score - a.score)
         .slice(0, 600)
         .map(item => item.post)
+    tick('Bucket 1.5 loaded')
 
     // bucket 2: Global Gems (Last 30 days, any post with high engagement)
     // RESTORED: The user wants discovery. We will sandbox it in the Scoring phase.
@@ -394,6 +404,7 @@ export const handler = async (
         .sort((a, b) => b.score - a.score)
         .slice(0, batchMode ? 3000 : 1600) // Increased for infinite scroll
         .map(item => item.post)
+    tick('Bucket 2 loaded')
 
     // bucket 3: Bubble Highlights (Last 30 days, from closest circle only)
     const bucket3Raw = await ctx.db
@@ -429,6 +440,7 @@ export const handler = async (
         .sort((a, b) => b.score - a.score)
         .slice(0, 800)
         .map(item => item.post)
+    tick('Bucket 3 loaded')
 
     const [posts1, posts1_5, posts2, posts3] = [bucket1, bucket1_5, bucket2, bucket3]
 
@@ -459,6 +471,7 @@ export const handler = async (
             eb('actor', 'in', Array.from(influentialL2Dids).length > 0 ? Array.from(influentialL2Dids) : ['dummy'])
         ]))
         .execute()
+    tick('Interactions for scoring loaded')
 
     const networkEffortMap: Record<string, { l1Likes: number, l2Likes: number, l1Reposts: number, l2Reposts: number, actors: Set<string>, repostUri?: string }> = {}
     interactions.forEach(int => {
@@ -578,6 +591,7 @@ export const handler = async (
     console.log(`[Self-Reply Chains] Found ${Object.keys(selfReplyChains).length} potential self-reply chains`)
     console.log(`[User Interactions] Found ${userInteractions.length} user interactions (${userInteractions.filter(ui => ui.type === 'like').length} likes, ${userInteractions.filter(ui => ui.type === 'repost').length} reposts, ${userInteractions.filter(ui => ui.type === 'reply').length} replies)`)
     console.log(`[InteractionSeen Fatigue] Found ${seenPosts.length} recently seen posts for ${requesterDid.slice(0, 10)}...`)
+    tick('Reply analysis complete')
 
     // Load user keywords for interest boosting
     const userKeywords = await ctx.db
@@ -630,6 +644,7 @@ export const handler = async (
     })
 
     console.log(`[Author Fatigue] Loaded fatigue data for ${authorFatigueData.length} authors`)
+    tick('Author fatigue loaded')
 
     // Update reputation based on user's recent interactions with recommended posts
     // This is a simplified version - in production you'd want more sophisticated tracking
@@ -802,7 +817,7 @@ export const handler = async (
             const nestedBoost = Math.round(opBoostMap[post.uri] * 0.3)
             score += nestedBoost
             signals['nested_convo_boost'] = nestedBoost
-            console.log(`[Nested Boost] Applied +${nestedBoost} boost to nested conversation: ${post.uri.slice(-10)}`)
+            // console.log(`[Nested Boost] Applied +${nestedBoost} boost to nested conversation: ${post.uri.slice(-10)}`)
         }
 
         // Advanced Reply Scoring System
@@ -1031,7 +1046,7 @@ export const handler = async (
 
         return { post, score: Math.round(score), signals, repostUri: networkInteractions?.repostUri }
     })
-
+    tick('Scoring complete')
 
     // Filter and Dedup with Advanced Reply Logic
     const filtered = scoredPosts.filter(sp => {
