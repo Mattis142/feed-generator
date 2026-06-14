@@ -239,6 +239,12 @@ export async function getTasteSimilarUsers(
       'taste_similarity.agreementCount'
     ])
     .where('taste_reputation.userDid', '=', userDid)
+    .where((eb) => eb.or([
+      eb('taste_reputation.reputationScore', '>', 1.1),
+      eb('taste_reputation.reputationScore', '<', 0.9)
+    ]))
+    .orderBy('taste_reputation.updatedAt', 'desc')
+    .limit(1000)
     .execute()
 
   // 3. Calculate dynamic decay
@@ -276,13 +282,15 @@ export async function getTasteSimilarUsers(
   }
 
   // 4. Separate positive and negative twins
+  // By slicing at Math.ceil(limit / 2), we keep the total volume at exactly `limit` (e.g. 20)
+  // This halves the data volume sent to the next step, restoring blazing fast performance.
   const positiveTwins = decayedTwins.filter(t => t.reputationScore > 1.1)
     .sort((a, b) => b.reputationScore - a.reputationScore)
-    .slice(0, limit)
+    .slice(0, Math.ceil(limit / 2))
 
   const negativeTwins = decayedTwins.filter(t => t.reputationScore < 0.9)
     .sort((a, b) => a.reputationScore - b.reputationScore) // Lowest first
-    .slice(0, limit)
+    .slice(0, Math.floor(limit / 2))
 
   return [...positiveTwins, ...negativeTwins]
 }
