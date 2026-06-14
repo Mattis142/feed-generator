@@ -110,6 +110,12 @@ migrations['003'] = {
       .on('post')
       .column('likeCount')
       .execute()
+
+    await db.schema
+      .createIndex('post_likeCount_indexedAt_idx')
+      .on('post')
+      .columns(['likeCount', 'indexedAt'])
+      .execute()
     await db.schema
       .createIndex('graph_follow_follower_idx')
       .on('graph_follow')
