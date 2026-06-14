@@ -581,8 +581,14 @@ export const handler = async (
         .where('userDid', '=', requesterDid)
         .execute()
 
-    const keywordMap = new Map<string, number>()
-    userKeywords.forEach(kw => keywordMap.set(kw.keyword.toLowerCase(), kw.score))
+    const keywordMap = new Map<string, { weight: number; regex: RegExp }>()
+    userKeywords.forEach(kw => {
+        const keyword = kw.keyword.toLowerCase()
+        try {
+            const regex = new RegExp(`\\b${keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i')
+            keywordMap.set(keyword, { weight: kw.score, regex })
+        } catch (e) {}
+    })
     console.log(`[Interest Keywords] Loaded ${keywordMap.size} keywords for user`)
 
     // 2.6. Taste Similarity Analysis - MOVED UP
@@ -728,15 +734,13 @@ export const handler = async (
         // 2. Keyword Boost (Whole Word Matching only to prevent false positives like "post" in "posters")
         if (post.text && keywordMap.size > 0) {
             const textLower = post.text.toLowerCase()
-            for (const [keyword, kwWeight] of keywordMap.entries()) {
-                // Use regex for whole-word boundary check
-                const regex = new RegExp(`\\b${keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i')
-                if (regex.test(textLower)) {
+            for (const [keyword, data] of keywordMap.entries()) {
+                if (data.regex.test(textLower)) {
                     hasKeywordMatch = true
                     discoveryMatch = true
                     // Multiplier: increased for discovery punch-through
                     const multiplier = isOutsideSocialGraph ? (batchMode ? 800 : 1200) : 100
-                    keywordBoost += kwWeight * multiplier
+                    keywordBoost += data.weight * multiplier
                 }
             }
         }
@@ -1023,6 +1027,7 @@ export const handler = async (
         return { post, score: Math.round(score), signals, repostUri: networkInteractions?.repostUri }
     })
 
+
     // Filter and Dedup with Advanced Reply Logic
     const filtered = scoredPosts.filter(sp => {
         // HARD FILTER: Completely remove posts the user has already liked or explicitly hidden
@@ -1030,6 +1035,7 @@ export const handler = async (
         if (userInteraction === 'like' || userInteraction === 'hide') {
             return false // Never show liked or hidden posts again
         }
+
 
         // HARD FILTER: Completely remove posts that have been seen 3+ times
         const seenCount = seenCountMap[sp.post.uri] || 0
