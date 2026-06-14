@@ -580,8 +580,10 @@ function generateFeedContext(trace: any): string {
     let extra = ''
     if (trace.signals) {
       const s = trace.signals
-      if (s.taste_boost) extra += `;taste:${Math.round(s.taste_boost)}`
-      if (s.keyword_match) extra += `;kw:${s.keyword_match}`
+      const taste = s.taste_boost || s.taste_discovery
+      const kw = s.keyword_boost || s.keyword_discovery || s.keyword_match
+      if (taste) extra += `;taste:${Math.round(taste)}`
+      if (kw) extra += `;kw:${Math.round(kw)}`
       if (s.jitter) extra += `;jit:${Math.round(s.jitter)}`
       if (trace.semanticScore) extra += `;orig:${Math.round(trace.semanticScore)}`
     }

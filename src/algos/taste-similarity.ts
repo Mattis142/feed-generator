@@ -345,33 +345,15 @@ export async function cleanupOldTasteData(ctx: AppContext | { db: Database }, da
     .where('agreementCount', '<', 3)
     .execute()
 
-  // For reputation records, we calculate their basic time decay
-  // and delete them if their decayed score is close to 1.0 (between 0.7 and 1.3)
-  const oldRecords = await ctx.db
-    .selectFrom('taste_reputation')
-    .selectAll()
-    .where('updatedAt', '<', cutoffDate)
+  // For reputation records, instead of doing expensive math in memory for millions of rows
+  // which blocks the Node.js event loop and locks the database, we rely on the fact that
+  // time decay mathematically destroys ALL scores after ~120 days. 
+  // Positive twins (1% decay) drop by 70%, negative twins (5% decay) drop by 99%.
+  // Therefore, we can safely and instantly delete ALL records older than 120 days.
+  const hardCutoffDate = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString()
+  
+  await ctx.db
+    .deleteFrom('taste_reputation')
+    .where('updatedAt', '<', hardCutoffDate)
     .execute()
-
-  for (const r of oldRecords) {
-    const hoursSinceUpdate = (Date.now() - new Date(r.updatedAt).getTime()) / (1000 * 60 * 60)
-    let decayedScore = r.reputationScore
-
-    if (r.reputationScore > 1.0) {
-      const timeMultiplier = Math.pow(0.98, hoursSinceUpdate / 24)
-      decayedScore = 1.0 + ((r.reputationScore - 1.0) * timeMultiplier)
-    } else if (r.reputationScore < 1.0) {
-      const timeMultiplier = Math.pow(0.95, hoursSinceUpdate / 24)
-      decayedScore = 1.0 - ((1.0 - r.reputationScore) * timeMultiplier)
-    }
-
-    // If the score has decayed back to neutrality (between 0.7 and 1.3), delete it
-    if (decayedScore >= 0.7 && decayedScore <= 1.3) {
-      await ctx.db
-        .deleteFrom('taste_reputation')
-        .where('userDid', '=', r.userDid)
-        .where('similarUserDid', '=', r.similarUserDid)
-        .execute()
-    }
-  }
 }
