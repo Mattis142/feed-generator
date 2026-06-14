@@ -228,8 +228,8 @@ export const handler = async (
 
     tick('User interactions loaded')
 
-    // 2.0. Taste Similarity Analysis - Find users with similar tastes (Increased to 100 for batch, 20 for live to prevent timeout)
-    const tasteSimilarUsers = await getTasteSimilarUsers(ctx, requesterDid, batchMode ? 100 : 20)
+    // 2.0. Taste Similarity Analysis - Find users with similar tastes (Increased to 100 for batch, 60 for live to prevent timeout)
+    const tasteSimilarUsers = await getTasteSimilarUsers(ctx, requesterDid, batchMode ? 100 : 60)
     console.log(`[Taste Similarity] Found ${tasteSimilarUsers.length} taste-similar users`)
 
     // Get posts liked by taste-similar users in the last 72 hours (24h for live)
