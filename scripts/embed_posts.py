@@ -7,6 +7,7 @@ import requests
 from io import BytesIO
 import argparse
 import os
+import concurrent.futures
 
 def load_model(model_path):
     """Load the MobileCLIP2-S2 model."""
@@ -98,6 +99,9 @@ def process_batch(input_file, output_file, model_path, batch_size=32):
     all_alt_texts = []
     alt_text_to_post = []  # (post_idx, alt_idx, alt_text)
     
+    # Collect text and alt texts synchronously, but prepare image download tasks
+    image_download_tasks = [] # (post_idx, img_idx, url)
+
     for post_idx, post in enumerate(posts):
         uri = post.get('uri')
         text = post.get('text', '') or ''
@@ -109,22 +113,39 @@ def process_batch(input_file, output_file, model_path, batch_size=32):
             all_texts.append(text)
             text_to_post.append((post_idx, text))
 
-        # Collect images
+        # Collect image tasks
         for img_idx, url in enumerate(image_urls):
-            img = download_image(url)
-            if img:
-                try:
-                    img_tensor = preprocess(img)
-                    all_images.append(img_tensor)
-                    image_to_post.append((post_idx, img_idx, img_tensor))
-                except Exception as e:
-                    print(f"Warning: Failed to process image {url}: {e}", file=sys.stderr)
+            image_download_tasks.append((post_idx, img_idx, url))
             
         # Collect alt texts
         for alt_idx, alt in enumerate(alt_texts):
             if alt and alt.strip():
                 all_alt_texts.append(alt)
                 alt_text_to_post.append((post_idx, alt_idx, alt))
+
+    # Download images concurrently
+    if image_download_tasks:
+        print(f"Downloading {len(image_download_tasks)} images concurrently...", file=sys.stderr)
+        
+        def download_and_preprocess(task):
+            p_idx, i_idx, u = task
+            img = download_image(u)
+            if img:
+                try:
+                    img_tensor = preprocess(img)
+                    return (p_idx, i_idx, img_tensor)
+                except Exception as e:
+                    print(f"Warning: Failed to process image {u}: {e}", file=sys.stderr)
+            return None
+
+        # Sort tasks back to original order after concurrent processing
+        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+            results = list(executor.map(download_and_preprocess, image_download_tasks))
+            
+        for res in results:
+            if res is not None:
+                all_images.append(res[2])
+                image_to_post.append(res)
 
     print(f"Collected: {len(all_texts)} texts, {len(all_images)} images, {len(all_alt_texts)} alt texts", file=sys.stderr)
 

@@ -197,47 +197,54 @@ async function run() {
                     console.log(`[Batch Pipeline] Fetching ${postsToFetch.length} posts from AppView (image metadata + text fallback)...`)
                     const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
 
-                    // Fetch in batches of 25 (AppView limit)
+                    // Group into chunks of 25 (AppView limit)
                     const urisToFetch = postsToFetch.map((p: any) => p.uri)
+                    const chunkedUris: string[][] = []
                     for (let i = 0; i < urisToFetch.length; i += 25) {
-                        const batchUris = urisToFetch.slice(i, i + 25)
-                        process.stdout.write(`\r  [AppView] Fetching candidates: ${i}/${urisToFetch.length}...`)
-                        try {
-                            const res = await publicAgent.getPosts({ uris: batchUris })
-                            if (res.success) {
-                                for (const postView of res.data.posts) {
-                                    const record = postView.record as any
-                                    const image_urls: string[] = []
-                                    const alt_text: string[] = []
+                        chunkedUris.push(urisToFetch.slice(i, i + 25))
+                    }
 
-                                    if (postView.embed) {
-                                        // Handle images
-                                        if (postView.embed.images) {
-                                            // @ts-ignore
-                                            postView.embed.images.forEach((img: any) => {
-                                                if (img.thumb) image_urls.push(img.thumb)
-                                                else if (img.fullsize) image_urls.push(img.fullsize)
-                                                if (img.alt) alt_text.push(img.alt)
-                                            })
+                    // Process 5 chunks concurrently (125 posts at a time)
+                    for (let i = 0; i < chunkedUris.length; i += 5) {
+                        const concurrentChunks = chunkedUris.slice(i, i + 5)
+                        process.stdout.write(`\r  [AppView] Fetching candidates: ${Math.min((i + 5) * 25, urisToFetch.length)}/${urisToFetch.length}...`)
+                        
+                        await Promise.all(concurrentChunks.map(async (batchUris) => {
+                            try {
+                                const res = await publicAgent.getPosts({ uris: batchUris })
+                                if (res.success) {
+                                    for (const postView of res.data.posts) {
+                                        const record = postView.record as any
+                                        const image_urls: string[] = []
+                                        const alt_text: string[] = []
+
+                                        if (postView.embed) {
+                                            // Handle images
+                                            if (postView.embed.images) {
+                                                // @ts-ignore
+                                                postView.embed.images.forEach((img: any) => {
+                                                    // STRICTLY use thumb to avoid downloading massive full-size images
+                                                    if (img.thumb) image_urls.push(img.thumb)
+                                                    if (img.alt) alt_text.push(img.alt)
+                                                })
+                                            }
                                         }
-                                        // Handle record embeds with images (external, etc)
-                                        // ... basic support for now
+
+                                        // Find the original post data to get DB text
+                                        const originalPost = postsToFetch.find(p => p.uri === postView.uri)
+
+                                        richPosts.push({
+                                            uri: postView.uri,
+                                            text: originalPost?.text || record.text || '',  // Prefer DB text, fallback to AppView
+                                            image_urls,
+                                            alt_text
+                                        })
                                     }
-
-                                    // Find the original post data to get DB text
-                                    const originalPost = postsToFetch.find(p => p.uri === postView.uri)
-
-                                    richPosts.push({
-                                        uri: postView.uri,
-                                        text: originalPost?.text || record.text || '',  // Prefer DB text, fallback to AppView
-                                        image_urls,
-                                        alt_text
-                                    })
                                 }
+                            } catch (err) {
+                                console.error(`\n[Batch Pipeline] Failed to fetch post details for a batch:`, err)
                             }
-                        } catch (err) {
-                            console.error(`[Batch Pipeline] Failed to fetch post details for batch ${i}:`, err)
-                        }
+                        }))
                     }
                     console.log(`\n  [AppView] Candidates fetched: Done.`)
                 }
@@ -263,11 +270,7 @@ async function run() {
                     ], {
                         env: {
                             ...process.env,
-                            OMP_NUM_THREADS: '1',
-                            MKL_NUM_THREADS: '1',
-                            OPENBLAS_NUM_THREADS: '1',
-                            VECLIB_MAXIMUM_THREADS: '1',
-                            NUMEXPR_NUM_THREADS: '1'
+                            // Removed artificial single-thread constraints to allow MPS/multi-core
                         }
                     })
 
@@ -501,43 +504,51 @@ async function run() {
 
                     // Batch fetch from AppView
                     const urisToFetch = missingUris
+                    
+                    const chunkedUris: string[][] = []
                     for (let i = 0; i < urisToFetch.length; i += 25) {
-                        const batchUris = urisToFetch.slice(i, i + 25)
-                        process.stdout.write(`\r  [AppView] Fetching liked posts: ${i}/${urisToFetch.length}...`)
-                        try {
-                            const res = await publicAgent.getPosts({ uris: batchUris })
-                            if (res.success) {
-                                for (const postView of res.data.posts) {
-                                    const record = postView.record as any
-                                    const image_urls: string[] = []
-                                    const alt_text: string[] = []
+                        chunkedUris.push(urisToFetch.slice(i, i + 25))
+                    }
+                    
+                    for (let i = 0; i < chunkedUris.length; i += 5) {
+                        const concurrentChunks = chunkedUris.slice(i, i + 5)
+                        process.stdout.write(`\r  [AppView] Fetching liked posts: ${Math.min((i + 5) * 25, urisToFetch.length)}/${urisToFetch.length}...`)
+                        
+                        await Promise.all(concurrentChunks.map(async (batchUris) => {
+                            try {
+                                const res = await publicAgent.getPosts({ uris: batchUris })
+                                if (res.success) {
+                                    for (const postView of res.data.posts) {
+                                        const record = postView.record as any
+                                        const image_urls: string[] = []
+                                        const alt_text: string[] = []
 
-                                    if (postView.embed && postView.embed.images) {
-                                        // @ts-ignore
-                                        postView.embed.images.forEach((img: any) => {
-                                            if (img.thumb) image_urls.push(img.thumb)
-                                            else if (img.fullsize) image_urls.push(img.fullsize)
-                                            if (img.alt) alt_text.push(img.alt)
+                                        if (postView.embed && postView.embed.images) {
+                                            // @ts-ignore
+                                            postView.embed.images.forEach((img: any) => {
+                                                if (img.thumb) image_urls.push(img.thumb)
+                                                if (img.alt) alt_text.push(img.alt)
+                                            })
+                                        }
+
+                                        richLikedPosts.push({
+                                            uri: postView.uri,
+                                            text: record.text || '',
+                                            image_urls,
+                                            alt_text
+                                        })
+                                        
+                                        postMetadataMap.set(postView.uri, {
+                                            author: postView.author.did,
+                                            indexedAt: (record.createdAt || postView.indexedAt) as string,
+                                            likeCount: postView.likeCount || 0
                                         })
                                     }
-
-                                    richLikedPosts.push({
-                                        uri: postView.uri,
-                                        text: record.text || '',
-                                        image_urls,
-                                        alt_text
-                                    })
-                                    
-                                    postMetadataMap.set(postView.uri, {
-                                        author: postView.author.did,
-                                        indexedAt: (record.createdAt || postView.indexedAt) as string,
-                                        likeCount: postView.likeCount || 0
-                                    })
                                 }
+                            } catch (err) {
+                                console.error(`\n[Batch Pipeline] Failed to fetch liked post details for a batch:`, err)
                             }
-                        } catch (err) {
-                            console.error(`\n[Batch Pipeline] Failed to fetch liked post details batch ${i}:`, err)
-                        }
+                        }))
                     }
                     console.log(`\n  [AppView] Liked posts fetched: Done.`)
 
@@ -838,36 +849,26 @@ async function run() {
             const generatedAt = new Date().toISOString()
 
             if (topCandidates.length > 0) {
-                // Insert in batches of 50 to avoid SQLite variable limits
-                for (let i = 0; i < topCandidates.length; i += 50) {
-                    const batch = topCandidates.slice(i, i + 50)
-                    let retries = 3
-                    while (retries > 0) {
-                        try {
-                            await db
-                                .insertInto('user_candidate_batch')
-                                .values(batch.map(c => ({
-                                    userDid,
-                                    uri: c.uri,
-                                    semanticScore: c.semanticScore,
-                                    pipelineScore: c.pipelineScore,
-                                    centroidId: c.centroidId,
-                                    batchId,
-                                    generatedAt,
-                                    pipelineSignals: JSON.stringify(c.pipelineSignals || {}),
-                                    clusterBreakdown: JSON.stringify(c.allClusterScores || {}),
-                                })))
-                                .execute()
-                            break // Success
-                        } catch (err: any) {
-                            if (err.code === 'SQLITE_BUSY' && retries > 1) {
-                                console.log(`[Batch Pipeline] Database busy, retrying in 1s... (${retries - 1} left)`)
-                                await new Promise(resolve => setTimeout(resolve, 1000))
-                                retries--
-                            } else {
-                                throw err
-                            }
-                        }
+                // Insert in batches of 500 for Postgres
+                for (let i = 0; i < topCandidates.length; i += 500) {
+                    const batch = topCandidates.slice(i, i + 500)
+                    try {
+                        await db
+                            .insertInto('user_candidate_batch')
+                            .values(batch.map(c => ({
+                                userDid,
+                                uri: c.uri,
+                                semanticScore: c.semanticScore,
+                                pipelineScore: c.pipelineScore,
+                                centroidId: c.centroidId,
+                                batchId,
+                                generatedAt,
+                                pipelineSignals: JSON.stringify(c.pipelineSignals || {}),
+                                clusterBreakdown: JSON.stringify(c.allClusterScores || {}),
+                            })))
+                            .execute()
+                    } catch (err) {
+                        throw err
                     }
                 }
 

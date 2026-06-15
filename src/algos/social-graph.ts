@@ -690,15 +690,21 @@ export const handler = async (
     // Update reputation asynchronously in the background so it doesn't block the feed request
     // or starve the connection pool if multiple requests hit simultaneously
     Promise.resolve().then(async () => {
+        const updateTasks: Array<() => Promise<void>> = []
         for (const interaction of recentUserInteractions) {
             const tasteData = tasteSimilarPostMap.get(interaction.target)
             if (tasteData) {
                 // User interacted with a post recommended by taste-similar users
                 const action = interaction.type === 'like' ? 'served_liked' : 'served_ignored'
                 for (const similarUserDid of tasteData.similarUserDids) {
-                    await updateTasteReputation(ctx, requesterDid, similarUserDid, action)
+                    updateTasks.push(() => updateTasteReputation(ctx, requesterDid, similarUserDid, action))
                 }
             }
+        }
+        
+        // Execute in concurrent chunks of 50 to avoid connection pool starvation while maximizing throughput
+        for (let i = 0; i < updateTasks.length; i += 50) {
+            await Promise.all(updateTasks.slice(i, i + 50).map(task => task()))
         }
     }).catch(err => console.error('[Taste Reputation Background] Error:', err))
 
