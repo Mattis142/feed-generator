@@ -97,7 +97,13 @@ def cluster_interests(vectors: np.ndarray, weights: np.ndarray, min_cluster_size
     # Pre-compute pairwise cosine distances (HDBSCAN requires this for cosine metric)
     # pdist returns distances in condensed form; squareform converts to full matrix
     print(f"    Computing cosine distance matrix for {len(vectors)} vectors...", file=sys.stderr)
-    cosine_distances = squareform(pdist(vectors, metric='cosine'))
+    dists = pdist(vectors, metric='cosine')
+    
+    # Sanitize distances: replace NaNs with 1.0 (orthogonal) and clip to [0, 2.0] to fix float precision errors
+    dists = np.nan_to_num(dists, nan=1.0)
+    dists = np.clip(dists, 0.0, 2.0)
+    
+    cosine_distances = squareform(dists)
     
     # Run HDBSCAN with pre-computed distance matrix
     print(f"    Running HDBSCAN with cosine distance metric (precomputed)...", file=sys.stderr)
@@ -308,6 +314,10 @@ def main():
     for item in data:
         vec = item.get('vector')
         if vec is None or len(vec) != 512:
+            continue
+            
+        # Ignore zero-vectors which cause divide-by-zero NaNs in cosine distance
+        if np.allclose(vec, 0.0):
             continue
 
         interaction_type = item.get('interactionType', 'like')
