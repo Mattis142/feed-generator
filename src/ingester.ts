@@ -179,25 +179,31 @@ async function diskSpaceWatchdog(db: any) {
 
 /**
  * Batched delete for posts with zero engagement older than cutoff.
- * Uses a subquery with LIMIT to lock only a fixed number of rows at a time,
- * preventing deadlocks with concurrent ingester inserts.
+ * Uses a subquery with SKIP LOCKED to lock only free rows,
+ * completely preventing deadlocks with concurrent ingester inserts.
  */
 async function deletePostsBatched(db: any, cutoff: string, maxLikes: number, maxReposts: number, batchSize: number): Promise<number> {
     try {
+        const batch = await db.selectFrom('post')
+            .select('uri')
+            .where('indexedAt', '<', cutoff)
+            .where('likeCount', '<=', maxLikes)
+            .where('repostCount', '<=', maxReposts)
+            .where((eb: any) => eb.not(eb.exists(
+                eb.selectFrom('user_candidate_batch').select('uri').whereRef('user_candidate_batch.uri', '=', 'post.uri')
+            )))
+            .limit(batchSize)
+            .forUpdate()
+            .skipLocked()
+            .execute()
+
+        if (batch.length === 0) return 0
+
+        const urisToDelete = batch.map((b: any) => b.uri)
         const result = await db.deleteFrom('post')
-            .where('uri', 'in', (eb: any) =>
-                eb.selectFrom('post')
-                    .select('uri')
-                    .where('indexedAt', '<', cutoff)
-                    .where('likeCount', '<=', maxLikes)
-                    .where('repostCount', '<=', maxReposts)
-                    // Never prune posts that are currently in an active semantic batch for ANY user
-                    .where(eb.not(eb.exists(
-                        eb.selectFrom('user_candidate_batch').select('uri').whereRef('user_candidate_batch.uri', '=', 'post.uri')
-                    )))
-                    .limit(batchSize)
-            )
+            .where('uri', 'in', urisToDelete)
             .executeTakeFirst()
+            
         return Number(result?.numDeletedRows ?? 0)
     } catch (err: any) {
         if (err?.code === '40P01') { // Postgres deadlock error code
@@ -214,18 +220,24 @@ async function deletePostsBatched(db: any, cutoff: string, maxLikes: number, max
  */
 async function deletePostsBatchedAll(db: any, cutoff: string, batchSize: number): Promise<number> {
     try {
+        const batch = await db.selectFrom('post')
+            .select('uri')
+            .where('indexedAt', '<', cutoff)
+            .where((eb: any) => eb.not(eb.exists(
+                eb.selectFrom('user_candidate_batch').select('uri').whereRef('user_candidate_batch.uri', '=', 'post.uri')
+            )))
+            .limit(batchSize)
+            .forUpdate()
+            .skipLocked()
+            .execute()
+
+        if (batch.length === 0) return 0
+
+        const urisToDelete = batch.map((b: any) => b.uri)
         const result = await db.deleteFrom('post')
-            .where('uri', 'in', (eb: any) =>
-                eb.selectFrom('post')
-                    .select('uri')
-                    .where('indexedAt', '<', cutoff)
-                    // Never prune posts that are currently in an active semantic batch for ANY user
-                    .where(eb.not(eb.exists(
-                        eb.selectFrom('user_candidate_batch').select('uri').whereRef('user_candidate_batch.uri', '=', 'post.uri')
-                    )))
-                    .limit(batchSize)
-            )
+            .where('uri', 'in', urisToDelete)
             .executeTakeFirst()
+
         return Number(result?.numDeletedRows ?? 0)
     } catch (err: any) {
         if (err?.code === '40P01') { // Postgres deadlock error code
