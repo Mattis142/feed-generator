@@ -625,12 +625,16 @@ async function run() {
 
             console.log(`[Batch Pipeline] Total liked-post embeddings for profile: ${likedEmbeddings.length} (${foundUris.size} cached, ${likedEmbeddings.length - foundUris.size} newly embedded)`)
 
-            if (likedEmbeddings.length >= 3) {
+            // Separate positive interactions from negative (hidden) interactions
+            const positiveEmbeddings = likedEmbeddings.filter(e => e.interactionType !== 'requestLess')
+            const hiddenEmbeddings = likedEmbeddings.filter(e => e.interactionType === 'requestLess').map(e => e.vector)
+
+            if (positiveEmbeddings.length >= 3) {
                 // Run HDBSCAN clustering via Python
                 const profileInputPath = join(tempDir, `profile_input_${userDid.replace(/:/g, '_')}.json`)
                 const profileOutputPath = join(tempDir, `profile_output_${userDid.replace(/:/g, '_')}.json`)
 
-                await writeFile(profileInputPath, JSON.stringify(likedEmbeddings))
+                await writeFile(profileInputPath, JSON.stringify(positiveEmbeddings))
 
                 const profileScript = join(process.cwd(), 'scripts', 'build_user_profile.py')
                 try {
@@ -786,6 +790,7 @@ async function run() {
                             ]
                         },
                         with_payload: ['uri', 'author', 'pipelineScore', 'pipelineSignals'],
+                        with_vector: true,
                     })
 
                     for (const hit of searchResult) {
@@ -803,6 +808,20 @@ async function run() {
                         const storedSignals = hit.payload?.pipelineSignals
                         let pipelineScore = pipelineInfo?.score ?? (storedScore !== undefined ? storedScore : -4000)
                         let pipelineSignals = pipelineInfo?.signals ?? (storedSignals ? JSON.parse(storedSignals as string) : { sandbox_penalty: -4000, cold_score: 50 })
+
+                        // Apply explicit penalty for posts similar to 'show less' content
+                        if (hiddenEmbeddings.length > 0 && hit.vector) {
+                            let maxHideSim = 0
+                            const hitVec = hit.vector as number[]
+                            for (const hideVec of hiddenEmbeddings) {
+                                const sim = cosineSimilarity(hitVec, hideVec)
+                                if (sim > maxHideSim) maxHideSim = sim
+                            }
+                            if (maxHideSim > 0.75) {
+                                pipelineScore -= 5000
+                                pipelineSignals['semantic_hide_penalty'] = -5000
+                            }
+                        }
 
                         semanticCandidates.push({
                             uri,
@@ -927,6 +946,22 @@ function generateBatchId(): string {
     bytes[2] = (now >> 16) & 0xff
     bytes[3] = Math.floor(Math.random() * 256)
     return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Compute cosine similarity between two vectors.
+ */
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+    }
+    if (normA === 0 || normB === 0) return 0;
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 run().catch((err) => {

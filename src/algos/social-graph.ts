@@ -846,6 +846,21 @@ export const handler = async (
             if (tasteBoost !== 0) signals['taste_boost'] = Math.round(tasteBoost)
         }
 
+        // Layer 1 Text & Reply Boost: Give direct follows a boost on their text and replies
+        // so they don't get drowned out by global media-heavy posts
+        if (isLayer1) {
+            if (post.replyParent) {
+                const layer1ReplyBoost = 500
+                score += layer1ReplyBoost
+                signals['layer1_reply_boost'] = layer1ReplyBoost
+            }
+            if (!post.hasImage && !post.hasVideo && !post.hasExternal) {
+                const layer1TextBoost = 500
+                score += layer1TextBoost
+                signals['layer1_text_boost'] = layer1TextBoost
+            }
+        }
+
         // OP Boost: Give original posts a small boost to encourage thread starts
         if (!post.replyParent && score > 0) {
             const opBoost = Math.min(300, Math.round(score * 0.1)) // Max 300, or 10% of score
