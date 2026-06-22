@@ -18,3 +18,8 @@ echo "📡 Re-publishing feed generator record to Bluesky..."
 sleep 3 # Give the API a moment to fully start
 sudo docker exec bsky-api yarn ts-node scripts/publishFeedNonInteractive.ts
 echo "✅ Feed generator record published."
+
+# Clean up dangling images and build cache to prevent disk full errors
+echo "🧹 Cleaning up old Docker images..."
+sudo docker system prune -f
+echo "✅ Cleanup complete."
